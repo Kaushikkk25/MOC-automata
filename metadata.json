@@ -1,0 +1,6 @@
+{
+  "name": "Automata & Formal Languages",
+  "description": "An interactive workspace for automata theory, conversions, pumping lemma proofs, and practice problems.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
