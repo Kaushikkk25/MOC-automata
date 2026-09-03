@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { MessageCircle, X, Send, Sparkles, Loader2, AlertTriangle } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 import { askGemini, GeminiConfigError } from '../utils/GeminiClient';
 
 interface ChatMessage {
@@ -7,7 +8,9 @@ interface ChatMessage {
   text: string;
 }
 
-const SYSTEM_INSTRUCTION = `You are "Kevin AI", a friendly, concise tutor embedded in AutomataStudio, a web app for learning Theory of Computation (DFA, NFA, ε-NFA, Regular Expressions, PDA, Turing Machines, Context-Free Grammars, and the standard conversions between them: Thompson's Construction for Regex-to-NFA, Subset/Powerset Construction for NFA-to-DFA, DFA Minimization via Table-Filling, and DFA-to-Regex via State Elimination). Keep answers clear, brief, and exam-friendly, using small worked examples where helpful. If asked to generate practice questions, state the target language or regex explicitly. If the student's question is ambiguous, ask one clarifying question instead of guessing.`;
+const SYSTEM_INSTRUCTION = `You are "Kevin AI", a friendly, concise tutor embedded in AutomataStudio, a web app for learning Theory of Computation (DFA, NFA, ε-NFA, Regular Expressions, PDA, Turing Machines, Context-Free Grammars, and the standard conversions between them: Thompson's Construction for Regex-to-NFA, Subset/Powerset Construction for NFA-to-DFA, DFA Minimization via Table-Filling, and DFA-to-Regex via State Elimination). Keep answers clear, brief, and exam-friendly, using small worked examples where helpful. If asked to generate practice questions, state the target language or regex explicitly. If the student's question is ambiguous, ask one clarifying question instead of guessing.
+
+Formatting rules: your response is rendered as Markdown (headers, **bold**, bullet lists, and code spans all work), but there is NO math-typesetting support — never use LaTeX or dollar-sign math delimiters like $q_1$ or \\{q_0, q_1\\}. Instead write state names and sets in plain text, e.g. "q0", "q1", the pair (q1, q0), or the set {q0, q1}. Use subscripts as plain characters (q0, q1) rather than LaTeX subscript syntax.`;
 
 const QUICK_PROMPTS = [
   "Explain Thompson's Construction with a small example",
@@ -91,16 +94,37 @@ export const GeminiAssistant: React.FC = () => {
             {messages.map((m, idx) => (
               <div
                 key={idx}
-                className={`max-w-[85%] rounded-xl px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap ${
+                className={`max-w-[85%] rounded-xl px-3 py-2 text-xs leading-relaxed ${
                   m.role === 'user'
-                    ? 'ml-auto bg-indigo-600 text-white'
+                    ? 'ml-auto bg-indigo-600 text-white whitespace-pre-wrap'
                     : m.role === 'error'
-                    ? 'bg-rose-50 border border-rose-200 text-rose-700 flex items-start gap-1.5'
+                    ? 'bg-rose-50 border border-rose-200 text-rose-700 flex items-start gap-1.5 whitespace-pre-wrap'
                     : 'bg-white border border-gray-200 text-slate-800'
                 }`}
               >
                 {m.role === 'error' && <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />}
-                <span>{m.text}</span>
+                {m.role === 'assistant' ? (
+                  <ReactMarkdown
+                    components={{
+                      p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                      h1: ({ children }) => <p className="font-bold text-sm mb-1.5">{children}</p>,
+                      h2: ({ children }) => <p className="font-bold text-sm mb-1.5">{children}</p>,
+                      h3: ({ children }) => <p className="font-bold text-xs mb-1">{children}</p>,
+                      h4: ({ children }) => <p className="font-bold text-xs mb-1">{children}</p>,
+                      ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-0.5 last:mb-0">{children}</ul>,
+                      ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-0.5 last:mb-0">{children}</ol>,
+                      li: ({ children }) => <li>{children}</li>,
+                      code: ({ children }) => (
+                        <code className="px-1 py-0.5 bg-slate-100 rounded text-[11px] font-mono">{children}</code>
+                      ),
+                      strong: ({ children }) => <strong className="font-bold">{children}</strong>,
+                    }}
+                  >
+                    {m.text}
+                  </ReactMarkdown>
+                ) : (
+                  <span>{m.text}</span>
+                )}
               </div>
             ))}
 
