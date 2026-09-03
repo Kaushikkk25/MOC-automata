@@ -59,9 +59,20 @@ export interface BatchTestResult {
   trace: string[];
 }
 
+export interface ThompsonConstructionStep {
+  step: number;
+  token: string;
+  operation: 'symbol' | 'concat' | 'union' | 'star';
+  resultLabel: string;
+  stateCount: number;
+  transitionCount: number;
+  explanation: string;
+}
+
 export interface SubsetConstructionStep {
   step: number;
   dfaStateName: string;
+  explanation: string;
   nfaStateSet: string[]; // state names
   transitions: Record<string, { targetDfaState: string; targetNfaSet: string[] }>;
   isAccept: boolean;

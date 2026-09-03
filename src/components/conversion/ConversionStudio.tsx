@@ -1,14 +1,17 @@
 import React, { useState } from 'react';
 import { AutomatonDefinition, ContextFreeGrammar, SimulationStep } from '../../types/automata';
 import {
+  checkAutomataEquivalence,
   convertDFAToRegex,
   convertNFAToDFA,
   convertRegexToNFA,
+  generateSampleTestStrings,
   getStateName,
   minimizeDFA,
   parseCYKTable,
   runBatchTests,
   simulateAutomatonStepByStep,
+  testAutomatonInput,
 } from '../../utils/automataEngine';
 import { AutomataCanvas } from '../canvas/AutomataCanvas';
 import {
@@ -26,8 +29,115 @@ import {
   Check,
   FastForward,
   Info,
-  Network
+  Network,
+  BarChart3,
+  Scale,
+  GitCompareArrows
 } from 'lucide-react';
+
+// Small reusable stat tile grid — used after every conversion to show
+// state/transition counts, accepting-state counts, and the algorithm used.
+const StatsGrid: React.FC<{ stats: Array<{ label: string; value: string | number }> }> = ({ stats }) => (
+  <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
+    <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+      <BarChart3 className="w-3.5 h-3.5" />
+      Conversion Statistics
+    </h4>
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+      {stats.map((s, idx) => (
+        <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-gray-200">
+          <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-0.5">{s.label}</div>
+          <div className="text-lg font-bold text-indigo-700 break-all">{s.value}</div>
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
+// Original vs Converted Verification — runs a real equivalence check plus a
+// sample batch of strings through BOTH automata, side by side, to visibly
+// prove the conversion preserved the language (or pinpoint where it didn't).
+const VerificationPanel: React.FC<{
+  original: AutomatonDefinition;
+  converted: AutomatonDefinition;
+  originalLabel: string;
+  convertedLabel: string;
+}> = ({ original, converted, originalLabel, convertedLabel }) => {
+  const eq = checkAutomataEquivalence(original, converted);
+  const sampleStrings = generateSampleTestStrings(original, 8);
+
+  return (
+    <div
+      className={`bg-white border rounded-2xl p-5 shadow-sm space-y-3 ${
+        eq.equivalent ? 'border-emerald-200' : 'border-rose-200'
+      }`}
+    >
+      <div className="flex items-center gap-2">
+        {eq.equivalent ? (
+          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+        ) : (
+          <XCircle className="w-4 h-4 text-rose-600" />
+        )}
+        <h4
+          className={`text-xs font-bold uppercase tracking-wider ${
+            eq.equivalent ? 'text-emerald-700' : 'text-rose-700'
+          }`}
+        >
+          {eq.equivalent
+            ? `Verified Equivalent — ${originalLabel} and ${convertedLabel} accept the same language`
+            : `Mismatch Found Between ${originalLabel} and ${convertedLabel}`}
+        </h4>
+      </div>
+
+      {!eq.equivalent && (
+        <p className="text-xs text-rose-700 leading-relaxed">
+          On input <span className="font-mono font-bold">"{eq.counterexample || 'ε'}"</span>, {originalLabel} says{' '}
+          <strong>{eq.acceptedByA ? 'ACCEPT' : 'REJECT'}</strong> but {convertedLabel} says{' '}
+          <strong>{eq.acceptedByB ? 'ACCEPT' : 'REJECT'}</strong>.
+        </p>
+      )}
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs text-left border-collapse font-mono">
+          <thead>
+            <tr className="border-b border-gray-200 text-slate-600 bg-gray-50">
+              <th className="p-2.5 font-semibold">Input</th>
+              <th className="p-2.5 font-semibold">{originalLabel}</th>
+              <th className="p-2.5 font-semibold">{convertedLabel}</th>
+              <th className="p-2.5 font-semibold">Match?</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200">
+            {sampleStrings.map((tc, idx) => {
+              const resA = testAutomatonInput(original, tc.input);
+              const resB = testAutomatonInput(converted, tc.input);
+              const match = resA === resB;
+              return (
+                <tr key={idx} className={match ? '' : 'bg-rose-50'}>
+                  <td className="p-2.5 text-slate-800">"{tc.input || 'ε'}"</td>
+                  <td className={`p-2.5 font-semibold ${resA ? 'text-emerald-600' : 'text-slate-400'}`}>
+                    {resA ? 'ACCEPT' : 'reject'}
+                  </td>
+                  <td className={`p-2.5 font-semibold ${resB ? 'text-emerald-600' : 'text-slate-400'}`}>
+                    {resB ? 'ACCEPT' : 'reject'}
+                  </td>
+                  <td className="p-2.5">
+                    {match ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    ) : (
+                      <XCircle className="w-3.5 h-3.5 text-rose-600" />
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
 
 // Default initial DFA (Ends with 01)
 const INITIAL_DFA: AutomatonDefinition = {
@@ -123,7 +233,7 @@ const PRESET_MODELS: Record<string, AutomatonDefinition> = {
 export const ConversionStudio: React.FC = () => {
   const [currentAutomaton, setCurrentAutomaton] = useState<AutomatonDefinition>(INITIAL_DFA);
   const [activeTab, setActiveTab] = useState<
-    'simulate' | 'regex_to_nfa' | 'nfa_to_dfa' | 'minimize_dfa' | 'dfa_to_regex' | 'cyk_parser'
+    'simulate' | 'regex_to_nfa' | 'nfa_to_dfa' | 'minimize_dfa' | 'dfa_to_regex' | 'cyk_parser' | 'equivalence_check'
   >('simulate');
 
   // Simulation test input
@@ -133,7 +243,7 @@ export const ConversionStudio: React.FC = () => {
 
   // Regex -> NFA
   const [regexInput, setRegexInput] = useState('(a|b)*abb');
-  const [generatedNfa, setGeneratedNfa] = useState<AutomatonDefinition | null>(null);
+  const [thompsonResult, setThompsonResult] = useState<ReturnType<typeof convertRegexToNFA> | null>(null);
 
   // NFA -> DFA
   const [subsetResult, setSubsetResult] = useState<ReturnType<typeof convertNFAToDFA> | null>(null);
@@ -159,6 +269,23 @@ export const ConversionStudio: React.FC = () => {
   const [cykInput, setCykInput] = useState('baaba');
   const [cykResult, setCykResult] = useState<ReturnType<typeof parseCYKTable> | null>(null);
 
+  // Standalone Equivalence Checker
+  const blankAutomaton = (): AutomatonDefinition => ({
+    type: 'DFA',
+    alphabet: ['0', '1'],
+    states: [{ id: 'q0', name: 'q0', x: 120, y: 160, isStart: true }],
+    transitions: [],
+    startStateId: 'q0',
+    acceptStateIds: [],
+  });
+  const [automatonA, setAutomatonA] = useState<AutomatonDefinition>(blankAutomaton());
+  const [automatonB, setAutomatonB] = useState<AutomatonDefinition>(blankAutomaton());
+  const [regexBuildA, setRegexBuildA] = useState('');
+  const [regexBuildB, setRegexBuildB] = useState('');
+  const [equivResult, setEquivResult] = useState<ReturnType<typeof checkAutomataEquivalence> | null>(null);
+  const [equivTraceA, setEquivTraceA] = useState<SimulationStep[]>([]);
+  const [equivTraceB, setEquivTraceB] = useState<SimulationStep[]>([]);
+
   // Run simulation
   const handleRunSim = () => {
     const steps = simulateAutomatonStepByStep(currentAutomaton, testInput);
@@ -167,6 +294,18 @@ export const ConversionStudio: React.FC = () => {
   };
 
   const activeStateIds = simSteps[currentStepIdx]?.currentStates || [];
+
+  const handleCheckEquivalence = () => {
+    const result = checkAutomataEquivalence(automatonA, automatonB);
+    setEquivResult(result);
+    if (!result.equivalent && result.counterexample !== null) {
+      setEquivTraceA(simulateAutomatonStepByStep(automatonA, result.counterexample));
+      setEquivTraceB(simulateAutomatonStepByStep(automatonB, result.counterexample));
+    } else {
+      setEquivTraceA([]);
+      setEquivTraceB([]);
+    }
+  };
 
   // Batch tests
   const batchTestCases = [
@@ -227,6 +366,7 @@ export const ConversionStudio: React.FC = () => {
             { id: 'minimize_dfa', label: 'DFA Minimization (Table-Filling)', icon: Minimize2 },
             { id: 'dfa_to_regex', label: 'DFA → Regex (State Elimination)', icon: FileCode },
             { id: 'cyk_parser', label: 'CFG → CYK Parsing Table', icon: Table },
+            { id: 'equivalence_check', label: 'Equivalence Checker', icon: GitCompareArrows },
           ].map((tab) => {
             const Icon = tab.icon;
             const isSel = activeTab === tab.id;
@@ -415,8 +555,8 @@ export const ConversionStudio: React.FC = () => {
                     key={ex}
                     onClick={() => {
                       setRegexInput(ex);
-                      const nfa = convertRegexToNFA(ex);
-                      setGeneratedNfa(nfa);
+                      const res = convertRegexToNFA(ex);
+                      setThompsonResult(res);
                     }}
                     className="text-xs font-mono px-2.5 py-1 rounded-md bg-slate-50 hover:bg-gray-100 border border-gray-200 text-indigo-600 transition"
                   >
@@ -436,8 +576,8 @@ export const ConversionStudio: React.FC = () => {
               />
               <button
                 onClick={() => {
-                  const nfa = convertRegexToNFA(regexInput);
-                  setGeneratedNfa(nfa);
+                  const res = convertRegexToNFA(regexInput);
+                  setThompsonResult(res);
                 }}
                 className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm transition"
               >
@@ -447,23 +587,58 @@ export const ConversionStudio: React.FC = () => {
             </div>
           </div>
 
-          {generatedNfa && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-700">
-                  Generated Thompson NFA ({generatedNfa.states.length} states, {generatedNfa.transitions.length} transitions)
-                </span>
-                <button
-                  onClick={() => {
-                    setCurrentAutomaton(generatedNfa);
-                    setActiveTab('simulate');
-                  }}
-                  className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition"
-                >
-                  Load in Interactive Tracer →
-                </button>
+          {thompsonResult && (
+            <div className="space-y-6">
+              {/* Conversion Statistics */}
+              <StatsGrid
+                stats={[
+                  { label: 'Input Regex Length', value: regexInput.length },
+                  { label: 'NFA States', value: thompsonResult.nfa.states.length },
+                  { label: 'NFA Transitions', value: thompsonResult.nfa.transitions.length },
+                  { label: 'Accepting States', value: thompsonResult.nfa.acceptStateIds.length },
+                  { label: 'Alphabet Size', value: thompsonResult.nfa.alphabet.length },
+                  { label: 'Construction Steps', value: thompsonResult.steps.length },
+                  { label: 'Method', value: "Thompson's Construction" },
+                ]}
+              />
+
+              {/* Step-by-Step Explanation */}
+              <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm space-y-3">
+                <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  Step-by-Step Construction Walkthrough
+                </h4>
+                <div className="space-y-2">
+                  {thompsonResult.steps.map((st) => (
+                    <div key={st.step} className="p-3 bg-slate-50 rounded-xl border border-gray-200 text-xs">
+                      <div className="font-semibold text-amber-700 mb-1">
+                        Step {st.step}: built '{st.resultLabel}' ({st.stateCount} states, {st.transitionCount} transitions)
+                      </div>
+                      <div className="text-slate-700 leading-relaxed">{st.explanation}</div>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <AutomataCanvas automaton={generatedNfa} onChange={setGeneratedNfa} />
+
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-slate-700">
+                    Generated Thompson NFA ({thompsonResult.nfa.states.length} states, {thompsonResult.nfa.transitions.length} transitions)
+                  </span>
+                  <button
+                    onClick={() => {
+                      setCurrentAutomaton(thompsonResult.nfa);
+                      setActiveTab('simulate');
+                    }}
+                    className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition"
+                  >
+                    Load in Interactive Tracer →
+                  </button>
+                </div>
+                <AutomataCanvas
+                  automaton={thompsonResult.nfa}
+                  onChange={(nfa) => setThompsonResult({ ...thompsonResult, nfa })}
+                />
+              </div>
             </div>
           )}
         </div>
@@ -495,6 +670,29 @@ export const ConversionStudio: React.FC = () => {
 
           {subsetResult && (
             <div className="space-y-6">
+              {/* Conversion Statistics */}
+              <StatsGrid
+                stats={[
+                  { label: 'Original NFA States', value: currentAutomaton.states.length },
+                  { label: 'Resulting DFA States', value: subsetResult.dfa.states.length },
+                  { label: 'DFA Transitions', value: subsetResult.dfa.transitions.length },
+                  { label: 'Accepting States', value: subsetResult.dfa.acceptStateIds.length },
+                  {
+                    label: 'Max Possible Subsets (2ⁿ)',
+                    value: `${Math.pow(2, currentAutomaton.states.length)} (only ${subsetResult.dfa.states.length} reachable)`,
+                  },
+                  { label: 'Method', value: 'Subset / Powerset Construction' },
+                ]}
+              />
+
+              {/* Original vs Converted Verification */}
+              <VerificationPanel
+                original={currentAutomaton}
+                converted={subsetResult.dfa}
+                originalLabel="Original NFA"
+                convertedLabel="Converted DFA"
+              />
+
               {/* Transition Table */}
               <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
                 <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
@@ -553,7 +751,29 @@ export const ConversionStudio: React.FC = () => {
                   </table>
                 </div>
               </div>
+              {/* Step-by-Step Construction Walkthrough */}
+<div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm space-y-3">
+  <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+    Step-by-Step Construction Walkthrough
+  </h4>
 
+  <div className="space-y-2">
+    {subsetResult.steps.map((st) => (
+      <div
+        key={st.step}
+        className="p-3 bg-slate-50 rounded-xl border border-gray-200 text-xs"
+      >
+        <div className="font-semibold text-amber-700 mb-1">
+          Step {st.step}: DFA state {st.dfaStateName}
+        </div>
+
+        <div className="text-slate-700 leading-relaxed">
+          {st.explanation}
+        </div>
+      </div>
+    ))}
+  </div>
+</div>
               {/* Render generated DFA */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
@@ -606,6 +826,34 @@ export const ConversionStudio: React.FC = () => {
 
           {minResult && (
             <div className="space-y-6">
+              {/* Conversion Statistics */}
+              <StatsGrid
+                stats={[
+                  { label: 'Original DFA States', value: currentAutomaton.states.length },
+                  { label: 'Minimized DFA States', value: minResult.minimizedDfa.states.length },
+                  { label: 'States Removed', value: currentAutomaton.states.length - minResult.minimizedDfa.states.length },
+                  {
+                    label: 'Reduction',
+                    value:
+                      currentAutomaton.states.length > 0
+                        ? `${Math.round(
+                            (1 - minResult.minimizedDfa.states.length / currentAutomaton.states.length) * 100
+                          )}%`
+                        : '0%',
+                  },
+                  { label: 'Accepting States', value: minResult.minimizedDfa.acceptStateIds.length },
+                  { label: 'Method', value: 'Table-Filling (Myhill-Nerode)' },
+                ]}
+              />
+
+              {/* Original vs Converted Verification */}
+              <VerificationPanel
+                original={currentAutomaton}
+                converted={minResult.minimizedDfa}
+                originalLabel="Original DFA"
+                convertedLabel="Minimized DFA"
+              />
+
               {/* Minimization steps */}
               <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm space-y-3">
                 <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
@@ -677,6 +925,16 @@ export const ConversionStudio: React.FC = () => {
 
           {dfaToRegexResult && (
             <div className="space-y-5">
+              {/* Conversion Statistics */}
+              <StatsGrid
+                stats={[
+                  { label: 'Original DFA States', value: currentAutomaton.states.length },
+                  { label: 'Resulting Regex Length', value: dfaToRegexResult.regex.length },
+                  { label: 'Elimination Steps', value: dfaToRegexResult.steps.length },
+                  { label: 'Method', value: 'State Elimination (GNFA)' },
+                ]}
+              />
+
               <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
                 <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
                   Final Derived Regular Expression:
@@ -685,6 +943,21 @@ export const ConversionStudio: React.FC = () => {
                   {dfaToRegexResult.regex}
                 </div>
               </div>
+
+              {/* Original vs Converted Verification (round-trip: re-parse the derived regex) */}
+              {dfaToRegexResult.regex !== '∅' ? (
+                <VerificationPanel
+                  original={currentAutomaton}
+                  converted={convertRegexToNFA(dfaToRegexResult.regex).nfa}
+                  originalLabel="Original DFA"
+                  convertedLabel="Regex (re-parsed)"
+                />
+              ) : (
+                <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm text-xs text-slate-500">
+                  The derived regex is ∅ (empty language) — skipping round-trip verification since '∅' isn't a
+                  parseable token in this tool's regex syntax.
+                </div>
+              )}
 
               <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm space-y-3">
                 <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
@@ -756,47 +1029,218 @@ export const ConversionStudio: React.FC = () => {
           </div>
 
           {cykResult && (
-            <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-gray-200">
+            <div className="space-y-6">
+              {/* Step-by-Step Explanation */}
+              <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm space-y-3">
                 <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                  CYK Triangular Dynamic Programming Table
+                  Step-by-Step Derivation Walkthrough
                 </h4>
-                <div
-                  className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 ${
-                    cykResult.accepted
-                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                      : 'bg-rose-50 text-rose-700 border border-rose-200'
-                  }`}
-                >
-                  {cykResult.accepted ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
-                  {cykResult.accepted ? 'Accepted by Grammar (S ∈ Top Cell)' : 'Rejected by Grammar'}
+                <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                  {cykResult.steps.map((s, idx) => (
+                    <div
+                      key={idx}
+                      className="p-2.5 bg-slate-50 rounded-lg border border-gray-200 text-xs font-mono text-slate-700"
+                    >
+                      {s}
+                    </div>
+                  ))}
                 </div>
               </div>
 
-              {/* Triangular table display */}
-              <div className="space-y-2 font-mono text-xs">
-                {cykResult.table.map((row, lIdx) => (
-                  <div key={lIdx} className="flex items-center gap-2">
-                    <span className="w-16 text-slate-500 text-[11px]">Len {lIdx + 1}:</span>
-                    <div className="flex items-center gap-2">
-                      {row.map((cell, sIdx) => (
-                        <div
-                          key={sIdx}
-                          className={`px-3 py-1.5 rounded-lg border text-center min-w-[70px] ${
-                            cell.includes('S')
-                              ? 'bg-indigo-50 border-indigo-400 text-indigo-700 font-bold shadow-sm'
-                              : cell.length > 0
-                              ? 'bg-white border-gray-300 text-slate-800'
-                              : 'bg-slate-50 border-gray-200 text-slate-400'
-                          }`}
-                        >
-                          &#123;{cell.join(',') || '∅'}&#125;
+              <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-gray-200">
+                  <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    CYK Triangular Dynamic Programming Table
+                  </h4>
+                  <div
+                    className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 ${
+                      cykResult.accepted
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : 'bg-rose-50 text-rose-700 border border-rose-200'
+                    }`}
+                  >
+                    {cykResult.accepted ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+                    {cykResult.accepted ? 'Accepted by Grammar (S ∈ Top Cell)' : 'Rejected by Grammar'}
+                  </div>
+                </div>
+
+                {/* Triangular table display */}
+                <div className="space-y-2 font-mono text-xs">
+                  {cykResult.table.map((row, lIdx) => (
+                    <div key={lIdx} className="flex items-center gap-2">
+                      <span className="w-16 text-slate-500 text-[11px]">Len {lIdx + 1}:</span>
+                      <div className="flex items-center gap-2">
+                        {row.map((cell, sIdx) => (
+                          <div
+                            key={sIdx}
+                            className={`px-3 py-1.5 rounded-lg border text-center min-w-[70px] ${
+                              cell.includes('S')
+                                ? 'bg-indigo-50 border-indigo-400 text-indigo-700 font-bold shadow-sm'
+                                : cell.length > 0
+                                ? 'bg-white border-gray-300 text-slate-800'
+                                : 'bg-slate-50 border-gray-200 text-slate-400'
+                            }`}
+                          >
+                            &#123;{cell.join(',') || '∅'}&#125;
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Tab 7: Standalone Equivalence Checker */}
+      {activeTab === 'equivalence_check' && (
+        <div className="space-y-6">
+          <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
+            <h3 className="text-sm font-bold text-slate-900">Automata Equivalence Checker</h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Build or load any two automata below and check whether they accept exactly the same language. If not,
+              get the shortest input where they disagree, traced through both.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            {/* Automaton A */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Automaton A</span>
+                <select
+                  onChange={(e) => {
+                    const model = PRESET_MODELS[e.target.value];
+                    if (model) setAutomatonA(JSON.parse(JSON.stringify(model)));
+                  }}
+                  className="bg-white border border-gray-300 text-[11px] text-slate-900 rounded-lg px-2 py-1 focus:border-indigo-500 focus:outline-none font-mono"
+                >
+                  <option value="">Load preset…</option>
+                  <option value="dfa_ends_01">DFA: Ends in 01</option>
+                  <option value="nfa_contains_010">NFA: Contains 010</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={regexBuildA}
+                  onChange={(e) => setRegexBuildA(e.target.value)}
+                  placeholder="Or build from regex, e.g. (a|b)*abb"
+                  className="flex-1 bg-white border border-gray-300 rounded-lg px-2.5 py-1.5 text-xs font-mono text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+                <button
+                  onClick={() => {
+                    if (regexBuildA.trim()) setAutomatonA(convertRegexToNFA(regexBuildA).nfa);
+                  }}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition"
+                >
+                  Build
+                </button>
+              </div>
+              <AutomataCanvas automaton={automatonA} onChange={setAutomatonA} />
+            </div>
+
+            {/* Automaton B */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Automaton B</span>
+                <select
+                  onChange={(e) => {
+                    const model = PRESET_MODELS[e.target.value];
+                    if (model) setAutomatonB(JSON.parse(JSON.stringify(model)));
+                  }}
+                  className="bg-white border border-gray-300 text-[11px] text-slate-900 rounded-lg px-2 py-1 focus:border-indigo-500 focus:outline-none font-mono"
+                >
+                  <option value="">Load preset…</option>
+                  <option value="dfa_ends_01">DFA: Ends in 01</option>
+                  <option value="nfa_contains_010">NFA: Contains 010</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={regexBuildB}
+                  onChange={(e) => setRegexBuildB(e.target.value)}
+                  placeholder="Or build from regex, e.g. (a|b)*abb"
+                  className="flex-1 bg-white border border-gray-300 rounded-lg px-2.5 py-1.5 text-xs font-mono text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+                <button
+                  onClick={() => {
+                    if (regexBuildB.trim()) setAutomatonB(convertRegexToNFA(regexBuildB).nfa);
+                  }}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition"
+                >
+                  Build
+                </button>
+              </div>
+              <AutomataCanvas automaton={automatonB} onChange={setAutomatonB} />
+            </div>
+          </div>
+
+          <div className="flex justify-center">
+            <button
+              onClick={handleCheckEquivalence}
+              className="flex items-center gap-2 px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-sm transition"
+            >
+              <Scale className="w-4 h-4" />
+              Check Equivalence
+            </button>
+          </div>
+
+          {equivResult && (
+            <div
+              className={`bg-white border rounded-2xl p-5 shadow-sm space-y-4 ${
+                equivResult.equivalent ? 'border-emerald-200' : 'border-rose-200'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                {equivResult.equivalent ? (
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                ) : (
+                  <XCircle className="w-5 h-5 text-rose-600" />
+                )}
+                <h4
+                  className={`text-sm font-bold ${equivResult.equivalent ? 'text-emerald-700' : 'text-rose-700'}`}
+                >
+                  {equivResult.equivalent ? 'Equivalent — same language' : 'Not Equivalent'}
+                </h4>
+              </div>
+
+              {!equivResult.equivalent && equivResult.counterexample !== null && (
+                <>
+                  <p className="text-xs text-rose-700 leading-relaxed">
+                    Shortest distinguishing input:{' '}
+                    <span className="font-mono font-bold">"{equivResult.counterexample || 'ε'}"</span> — Automaton A
+                    says <strong>{equivResult.acceptedByA ? 'ACCEPT' : 'REJECT'}</strong>, Automaton B says{' '}
+                    <strong>{equivResult.acceptedByB ? 'ACCEPT' : 'REJECT'}</strong>.
+                  </p>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="p-3 bg-slate-50 rounded-xl border border-gray-200 space-y-1">
+                      <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        Trace through Automaton A:
+                      </div>
+                      {equivTraceA.map((st, idx) => (
+                        <div key={idx} className="text-xs font-mono text-slate-700">
+                          {st.message}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="p-3 bg-slate-50 rounded-xl border border-gray-200 space-y-1">
+                      <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        Trace through Automaton B:
+                      </div>
+                      {equivTraceB.map((st, idx) => (
+                        <div key={idx} className="text-xs font-mono text-slate-700">
+                          {st.message}
                         </div>
                       ))}
                     </div>
                   </div>
-                ))}
-              </div>
+                </>
+              )}
             </div>
           )}
         </div>

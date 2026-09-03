@@ -5,6 +5,7 @@ import { PumpingLemmaStudio } from './components/pumping/PumpingLemmaStudio';
 import { ConversionStudio } from './components/conversion/ConversionStudio';
 import { PracticeStudio } from './components/practice/PracticeStudio';
 import { ExportModal } from './components/ExportModal';
+import { GeminiAssistant } from './components/GeminiAssistant';
 
 export default function App() {
   const [currentMode, setCurrentMode] = useState<'wizard' | 'pumping' | 'conversion' | 'practice'>('wizard');
@@ -49,6 +50,7 @@ export default function App() {
 
       {/* Export Modal */}
       <ExportModal isOpen={isExportOpen} onClose={() => setIsExportOpen(false)} />
+              <GeminiAssistant />
     </div>
   );
 }

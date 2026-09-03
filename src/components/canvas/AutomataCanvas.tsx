@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { AutomatonDefinition, StateNode, TransitionEdge } from '../../types/automata';
 import { generateId, getStateName } from '../../utils/automataEngine';
-import { Plus, Trash2, CheckCircle2, Play, ZoomIn, ZoomOut, RotateCcw, Move } from 'lucide-react';
+import { Plus, Trash2, CheckCircle2, Play, ZoomIn, ZoomOut, RotateCcw, Move, Maximize2 } from 'lucide-react';
 
 interface AutomataCanvasProps {
   automaton: AutomatonDefinition;
@@ -29,10 +29,56 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
   const [connectSourceId, setConnectSourceId] = useState<string | null>(null);
 
   // Zoom & Pan
+    // Zoom & Pan
   const [zoom, setZoom] = useState<number>(1);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // Fit all states into the visible canvas area by computing a bounding box
+  // of every state's (x, y) and choosing a zoom/pan that centers it.
+  const fitToScreen = () => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0 || rect.height === 0 || automaton.states.length === 0) return;
+
+    // Padding accounts for state radius, the START arrow (extends ~48px left
+    // of the start state), self-loop curves (~50px above a state), and
+    // transition label pills.
+    const PADDING = 90;
+    const xs = automaton.states.map((s) => s.x);
+    const ys = automaton.states.map((s) => s.y);
+    const minX = Math.min(...xs) - PADDING;
+    const maxX = Math.max(...xs) + PADDING;
+    const minY = Math.min(...ys) - PADDING;
+    const maxY = Math.max(...ys) + PADDING;
+
+    const contentWidth = Math.max(maxX - minX, 1);
+    const contentHeight = Math.max(maxY - minY, 1);
+
+    const scaleX = rect.width / contentWidth;
+    const scaleY = rect.height / contentHeight;
+    // Cap at 1.5x so a single tiny automaton doesn't get blown up absurdly;
+    // floor at 0.05 so even 60-70 states can shrink to fit.
+    const nextZoom = Math.min(Math.max(Math.min(scaleX, scaleY), 0.05), 1.5);
+
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+
+    setZoom(nextZoom);
+    setPan({
+      x: rect.width / 2 - cx * nextZoom,
+      y: rect.height / 2 - cy * nextZoom,
+    });
+  };
+
+  // Auto-fit whenever the number of states changes (states added/removed,
+  // or a freshly converted/loaded automaton) — not on every drag, since
+  // dragging changes x/y but not the count, and we don't want to yank the
+  // view out from under someone mid-drag.
+  useEffect(() => {
+    fitToScreen();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [automaton.states.length]);
 
   // Modal / Inputs for editing transition
   const [editingTransition, setEditingTransition] = useState<TransitionEdge | null>(null);
@@ -311,7 +357,7 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
   const selectedState = automaton.states.find((s) => s.id === selectedStateId);
 
   return (
-    <div className="relative w-full h-[520px] bg-white rounded-2xl border border-gray-200 overflow-hidden flex flex-col select-none shadow-sm">
+    <div className="relative w-full h-[70vh] min-h-[560px] bg-white rounded-2xl border border-gray-200 overflow-hidden flex flex-col select-none shadow-sm">
       {/* Top Toolbar */}
       <div className="flex items-center justify-between px-4 py-2.5 bg-white border-b border-gray-200 z-20">
         <div className="flex items-center gap-2">
@@ -345,7 +391,7 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
 
           <div className="h-4 w-px bg-gray-200 mx-1" />
 
-          {/* Zoom controls */}
+                    {/* Zoom controls */}
           <button
             onClick={() => setZoom((z) => Math.min(2, z + 0.15))}
             className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-gray-100 transition"
@@ -354,11 +400,18 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
             <ZoomIn className="w-4 h-4" />
           </button>
           <button
-            onClick={() => setZoom((z) => Math.max(0.4, z - 0.15))}
+            onClick={() => setZoom((z) => Math.max(0.05, z - 0.15))}
             className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-gray-100 transition"
             title="Zoom Out"
           >
             <ZoomOut className="w-4 h-4" />
+          </button>
+          <button
+            onClick={fitToScreen}
+            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-gray-100 transition"
+            title="Fit to Screen"
+          >
+            <Maximize2 className="w-4 h-4" />
           </button>
           <button
             onClick={() => {
@@ -366,7 +419,7 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
               setPan({ x: 0, y: 0 });
             }}
             className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-gray-100 transition"
-            title="Reset View"
+            title="Reset to 100% (no auto-fit)"
           >
             <RotateCcw className="w-4 h-4" />
           </button>
