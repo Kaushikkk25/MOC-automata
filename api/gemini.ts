@@ -1,12 +1,3 @@
-// Vercel Edge Function — this is YOUR backend proxy, deployed automatically
-// by Vercel from anything under /api. It holds the real Gemini API key
-// server-side (GEMINI_API_KEY, set in Vercel's Project Settings ->
-// Environment Variables — NOT prefixed with VITE_, so it is never bundled
-// into client JS and the browser never sees it).
-//
-// Uses the standard Web Request/Response API (no extra npm dependency
-// needed) via Vercel's Edge Runtime.
-
 export const config = { runtime: 'edge' };
 
 const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
@@ -27,7 +18,7 @@ export default async function handler(req: Request): Promise<Response> {
     );
   }
 
-  let body: { prompt?: string; systemInstruction?: string };
+  let body: { history?: Array<{ role?: string; text?: string }>; systemInstruction?: string };
   try {
     body = await req.json();
   } catch {
@@ -37,16 +28,19 @@ export default async function handler(req: Request): Promise<Response> {
     });
   }
 
-  const { prompt, systemInstruction } = body;
-  if (!prompt || typeof prompt !== 'string') {
-    return new Response(JSON.stringify({ error: 'Missing "prompt" string in request body' }), {
+  const { history, systemInstruction } = body;
+  if (!Array.isArray(history) || history.length === 0) {
+    return new Response(JSON.stringify({ error: 'Missing non-empty "history" array in request body' }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' },
     });
   }
 
   const geminiBody: Record<string, unknown> = {
-    contents: [{ parts: [{ text: prompt }] }],
+    contents: history.map((turn) => ({
+      role: turn.role === 'model' ? 'model' : 'user',
+      parts: [{ text: turn.text || '' }],
+    })),
   };
   if (systemInstruction) {
     geminiBody.systemInstruction = { parts: [{ text: systemInstruction }] };

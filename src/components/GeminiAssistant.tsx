@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { MessageCircle, X, Send, Sparkles, Loader2, AlertTriangle } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { askGemini, GeminiConfigError } from '../utils/GeminiClient';
+import { askGemini, GeminiConfigError, ChatTurn } from '../utils/GeminiClient';
 
 interface ChatMessage {
   role: 'user' | 'assistant' | 'error';
@@ -34,12 +34,22 @@ export const GeminiAssistant: React.FC = () => {
     const trimmed = text.trim();
     if (!trimmed || isLoading) return;
 
+    // Build the full turn history Gemini needs for context: everything said
+    // so far (skipping local-only error bubbles, which Gemini never actually
+    // produced), plus this new user message at the end.
+    const history: ChatTurn[] = [
+      ...messages
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .map((m) => ({ role: m.role === 'assistant' ? ('model' as const) : ('user' as const), text: m.text })),
+      { role: 'user', text: trimmed },
+    ];
+
     setMessages((prev) => [...prev, { role: 'user', text: trimmed }]);
     setInput('');
     setIsLoading(true);
 
     try {
-      const reply = await askGemini(trimmed, SYSTEM_INSTRUCTION);
+      const reply = await askGemini(history, SYSTEM_INSTRUCTION);
       setMessages((prev) => [...prev, { role: 'assistant', text: reply }]);
     } catch (err) {
       const message =

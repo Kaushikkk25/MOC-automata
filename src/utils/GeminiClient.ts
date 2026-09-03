@@ -1,12 +1,20 @@
+export interface ChatTurn {
+  role: 'user' | 'model';
+  text: string;
+}
+
 export class GeminiConfigError extends Error {}
 
-export async function askGemini(prompt: string, systemInstruction?: string): Promise<string> {
+// history must include the full conversation so far (in order), ending
+// with the newest user turn — Gemini's API is stateless and has no memory
+// of prior calls on its own, so every prior turn has to be resent each time.
+export async function askGemini(history: ChatTurn[], systemInstruction?: string): Promise<string> {
   let res: Response;
   try {
     res = await fetch('/api/gemini', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, systemInstruction }),
+      body: JSON.stringify({ history, systemInstruction }),
     });
   } catch {
     throw new Error('Could not reach the AI assistant — check your internet connection.');
