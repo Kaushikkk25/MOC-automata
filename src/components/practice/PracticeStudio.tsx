@@ -21,6 +21,7 @@ import {
   testAutomatonInput,
 } from '../../utils/automataEngine';
 import { AutomataCanvas } from '../canvas/AutomataCanvas';
+import { askGemini, GeminiConfigError } from '../../utils/GeminiClient';
 import confetti from 'canvas-confetti';
 import {
   Trophy,
@@ -48,6 +49,29 @@ interface CustomProblemMeta {
   requireDeterministic?: boolean;
   minimalStateCount?: number;
 }
+
+// Used only to suggest a REGEX for a custom question — the suggestion is
+// always validated against the real parser (convertRegexToNFA) before
+// being trusted, and every downstream fact (test cases, hints, reference
+// solution) is still computed by the deterministic engine, never by
+// Gemini. Gemini only ever proposes the starting regex string.
+const REGEX_GEN_SYSTEM_INSTRUCTION = `You generate regular expressions for Theory of Computation practice problems in an app called AutomataStudio. Respond with ONLY the regular expression itself, on a single line — no explanation, no quotes, no markdown, no code fences, nothing else before or after it.
+
+Strict syntax rules (the app's parser only supports these — using anything else will break it):
+- Single-character symbols from a small alphabet, e.g. a, b (or 0, 1).
+- Union: |
+- Kleene star: *
+- Parentheses for grouping: ( )
+- Concatenation is implicit — just write symbols next to each other, e.g. "ab" means a then b.
+- Do NOT use +, ?, character classes, anchors (^ $), backreferences, or any other regex feature.`;
+
+const CONVERSION_KIND_TOPIC_LABEL: Record<ConversionKind, string> = {
+  design: 'designing a DFA or NFA for a language',
+  regex_to_nfa: "converting a regex to an NFA via Thompson's Construction",
+  nfa_to_dfa: 'converting an NFA to a DFA via Subset Construction',
+  dfa_minimize: 'minimizing a DFA via the Table-Filling algorithm',
+  dfa_to_regex: 'converting a DFA to a regex via State Elimination',
+};
 
 interface CustomDerivation {
   thompsonSteps?: ThompsonConstructionStep[];
@@ -188,6 +212,9 @@ export const PracticeStudio: React.FC = () => {
   const [newDifficulty, setNewDifficulty] = useState<'Easy' | 'Medium' | 'Hard'>('Medium');
   const [newKind, setNewKind] = useState<ConversionKind>('design');
   const [addFormError, setAddFormError] = useState<string | null>(null);
+  const [aiTopicHint, setAiTopicHint] = useState('');
+  const [aiGenLoading, setAiGenLoading] = useState(false);
+  const [aiGenError, setAiGenError] = useState<string | null>(null);
 
   const allProblems = [...PRACTICE_PROBLEMS, ...customProblems];
 
@@ -359,6 +386,42 @@ export const PracticeStudio: React.FC = () => {
       } else {
         setMistakeDiagnosis(null);
       }
+    }
+  };
+
+  // Asks Gemini for a regex matching the chosen type/difficulty/topic, then
+  // validates it against the real parser (convertRegexToNFA) before
+  // accepting it — Gemini only ever suggests the starting point; it never
+  // determines correctness, same principle as the rest of this app.
+  const handleGenerateRegexWithAI = async () => {
+    setAiGenError(null);
+    setAiGenLoading(true);
+    try {
+      const prompt = `Suggest ONE regular expression suitable for a ${newDifficulty}-difficulty practice problem about ${CONVERSION_KIND_TOPIC_LABEL[newKind]}.${
+        aiTopicHint.trim() ? ` Theme/topic hint: ${aiTopicHint.trim()}.` : ''
+      } Easy should use roughly 1-2 operators. Medium should combine 2-3 concepts. Hard should be genuinely non-trivial. Use a 2-symbol alphabet like {a, b} or {0, 1}.`;
+
+      const raw = await askGemini([{ role: 'user', text: prompt }], REGEX_GEN_SYSTEM_INSTRUCTION);
+      const candidate = raw
+        .trim()
+        .split('\n')[0]
+        .trim()
+        .replace(/^["'`]+|["'`]+$/g, '');
+
+      const { nfa } = convertRegexToNFA(candidate);
+      if (nfa.states.length < 2) {
+        throw new Error('empty');
+      }
+
+      setNewRegex(candidate);
+    } catch (err) {
+      setAiGenError(
+        err instanceof GeminiConfigError
+          ? err.message
+          : 'Could not get a valid suggestion from Kevin AI — try again, or write your own regex.'
+      );
+    } finally {
+      setAiGenLoading(false);
     }
   };
 
@@ -556,6 +619,8 @@ export const PracticeStudio: React.FC = () => {
       setNewRegex('');
       setNewTitle('');
       setAddFormError(null);
+      setAiGenError(null);
+      setAiTopicHint('');
     } catch (err) {
       setAddFormError(
         'Could not build that regular expression. Try something like (a|b)*abb using |, *, and parentheses.'
@@ -683,13 +748,40 @@ export const PracticeStudio: React.FC = () => {
                   <option value="dfa_minimize">Convert: Minimize a DFA</option>
                   <option value="dfa_to_regex">Convert: DFA → Regex</option>
                 </select>
-                <input
-                  type="text"
-                  value={newTitle}
-                  onChange={(e) => setNewTitle(e.target.value)}
-                  placeholder="Title (optional)"
+                <select
+                  value={newDifficulty}
+                  onChange={(e) => setNewDifficulty(e.target.value as 'Easy' | 'Medium' | 'Hard')}
                   className="w-full bg-white border border-gray-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
+                >
+                  <option value="Easy">Easy</option>
+                  <option value="Medium">Medium</option>
+                  <option value="Hard">Hard</option>
+                </select>
+
+                <div className="p-2 bg-indigo-50/60 border border-indigo-100 rounded-lg space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-indigo-700">
+                    <Sparkles className="w-3 h-3" />
+                    Not sure what to practice? Ask Kevin AI to suggest one.
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      value={aiTopicHint}
+                      onChange={(e) => setAiTopicHint(e.target.value)}
+                      placeholder="Optional theme, e.g. 'binary strings'"
+                      className="flex-1 bg-white border border-gray-300 rounded-lg px-2 py-1 text-[11px] text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                    <button
+                      onClick={handleGenerateRegexWithAI}
+                      disabled={aiGenLoading}
+                      className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white transition whitespace-nowrap"
+                    >
+                      {aiGenLoading ? 'Thinking…' : 'Suggest'}
+                    </button>
+                  </div>
+                  {aiGenError && <div className="text-[10px] text-rose-600">{aiGenError}</div>}
+                </div>
+
                 <input
                   type="text"
                   value={newRegex}
@@ -700,15 +792,13 @@ export const PracticeStudio: React.FC = () => {
                     if (e.key === 'Enter') handleAddCustomProblem();
                   }}
                 />
-                <select
-                  value={newDifficulty}
-                  onChange={(e) => setNewDifficulty(e.target.value as 'Easy' | 'Medium' | 'Hard')}
+                <input
+                  type="text"
+                  value={newTitle}
+                  onChange={(e) => setNewTitle(e.target.value)}
+                  placeholder="Title (optional)"
                   className="w-full bg-white border border-gray-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                >
-                  <option value="Easy">Easy</option>
-                  <option value="Medium">Medium</option>
-                  <option value="Hard">Hard</option>
-                </select>
+                />
                 {addFormError && <div className="text-[11px] text-rose-600">{addFormError}</div>}
                 <div className="flex items-center gap-2">
                   <button
@@ -721,6 +811,8 @@ export const PracticeStudio: React.FC = () => {
                     onClick={() => {
                       setShowAddForm(false);
                       setAddFormError(null);
+                      setAiGenError(null);
+                      setAiTopicHint('');
                     }}
                     className="text-xs px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-slate-600 transition"
                   >

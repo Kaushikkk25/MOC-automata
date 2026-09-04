@@ -138,6 +138,46 @@ const VerificationPanel: React.FC<{
   );
 };
 
+// Preset dropdown + "build from regex" quick action, used above every
+// embedded canvas so each conversion tab can seed its own input without
+// depending on the Simulate tab's shared automaton.
+const InputBuilderRow: React.FC<{
+  regexValue: string;
+  onRegexChange: (v: string) => void;
+  onBuild: () => void;
+  onPreset: (model: AutomatonDefinition) => void;
+  placeholder?: string;
+}> = ({ regexValue, onRegexChange, onBuild, onPreset, placeholder }) => (
+  <div className="flex flex-wrap items-center gap-2">
+    <select
+      onChange={(e) => {
+        const model = PRESET_MODELS[e.target.value];
+        if (model) onPreset(JSON.parse(JSON.stringify(model)));
+      }}
+      className="bg-white border border-gray-300 text-xs text-slate-900 rounded-lg px-2.5 py-1.5 focus:border-indigo-500 focus:outline-none font-mono"
+    >
+      <option value="">Load preset…</option>
+      <option value="dfa_ends_01">DFA: Ends in 01</option>
+      <option value="nfa_contains_010">NFA: Contains 010</option>
+    </select>
+    <input
+      type="text"
+      value={regexValue}
+      onChange={(e) => onRegexChange(e.target.value)}
+      placeholder={placeholder || 'Or build from regex, e.g. (a|b)*abb'}
+      className="flex-1 min-w-[180px] bg-white border border-gray-300 rounded-lg px-2.5 py-1.5 text-xs font-mono text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+    />
+    <button
+      onClick={onBuild}
+      className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition"
+    >
+      Build
+    </button>
+  </div>
+);
+
+
+
 
 // Default initial DFA (Ends with 01)
 const INITIAL_DFA: AutomatonDefinition = {
@@ -241,17 +281,36 @@ export const ConversionStudio: React.FC = () => {
   const [simSteps, setSimSteps] = useState<SimulationStep[]>([]);
   const [currentStepIdx, setCurrentStepIdx] = useState(0);
 
+  // Shared blank single-state starter, reused by every tab below that has
+  // its own embedded canvas.
+  const blankAutomaton = (): AutomatonDefinition => ({
+    type: 'DFA',
+    alphabet: ['0', '1'],
+    states: [{ id: 'q0', name: 'q0', x: 120, y: 160, isStart: true }],
+    transitions: [],
+    startStateId: 'q0',
+    acceptStateIds: [],
+  });
+
   // Regex -> NFA
   const [regexInput, setRegexInput] = useState('(a|b)*abb');
   const [thompsonResult, setThompsonResult] = useState<ReturnType<typeof convertRegexToNFA> | null>(null);
 
-  // NFA -> DFA
+  // NFA -> DFA — each tab now owns its own input automaton + canvas
+  // directly, instead of depending on whatever's currently loaded in the
+  // Simulate tab's shared tracer.
+  const [nfaInput, setNfaInput] = useState<AutomatonDefinition>(blankAutomaton());
+  const [nfaInputBuildRegex, setNfaInputBuildRegex] = useState('');
   const [subsetResult, setSubsetResult] = useState<ReturnType<typeof convertNFAToDFA> | null>(null);
 
   // DFA Minimization
+  const [dfaMinInput, setDfaMinInput] = useState<AutomatonDefinition>(blankAutomaton());
+  const [dfaMinInputBuildRegex, setDfaMinInputBuildRegex] = useState('');
   const [minResult, setMinResult] = useState<ReturnType<typeof minimizeDFA> | null>(null);
 
   // DFA -> Regex
+  const [dfaToRegexInput, setDfaToRegexInput] = useState<AutomatonDefinition>(blankAutomaton());
+  const [dfaToRegexInputBuildRegex, setDfaToRegexInputBuildRegex] = useState('');
   const [dfaToRegexResult, setDfaToRegexResult] = useState<ReturnType<typeof convertDFAToRegex> | null>(null);
 
   // CYK Parser
@@ -270,14 +329,6 @@ export const ConversionStudio: React.FC = () => {
   const [cykResult, setCykResult] = useState<ReturnType<typeof parseCYKTable> | null>(null);
 
   // Standalone Equivalence Checker
-  const blankAutomaton = (): AutomatonDefinition => ({
-    type: 'DFA',
-    alphabet: ['0', '1'],
-    states: [{ id: 'q0', name: 'q0', x: 120, y: 160, isStart: true }],
-    transitions: [],
-    startStateId: 'q0',
-    acceptStateIds: [],
-  });
   const [automatonA, setAutomatonA] = useState<AutomatonDefinition>(blankAutomaton());
   const [automatonB, setAutomatonB] = useState<AutomatonDefinition>(blankAutomaton());
   const [regexBuildA, setRegexBuildA] = useState('');
@@ -647,21 +698,39 @@ export const ConversionStudio: React.FC = () => {
       {/* Tab 3: NFA -> DFA (Subset Construction) */}
       {activeTab === 'nfa_to_dfa' && (
         <div className="space-y-6">
-          <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm flex items-center justify-between">
+          <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm space-y-4">
             <div>
               <h3 className="text-sm font-bold text-slate-900">
                 Subset / Powerset Construction (NFA → DFA)
               </h3>
               <p className="text-xs text-slate-500">
-                Computes ε-closures and power set state table for the active automaton.
+                Build or load an NFA below, then convert it into an equivalent DFA.
               </p>
             </div>
+            <InputBuilderRow
+              regexValue={nfaInputBuildRegex}
+              onRegexChange={setNfaInputBuildRegex}
+              onBuild={() => {
+                if (nfaInputBuildRegex.trim()) setNfaInput(convertRegexToNFA(nfaInputBuildRegex).nfa);
+              }}
+              onPreset={(model) => setNfaInput(model)}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider px-1">
+              Your NFA (editable)
+            </span>
+            <AutomataCanvas automaton={nfaInput} onChange={setNfaInput} />
+          </div>
+
+          <div className="flex justify-center">
             <button
               onClick={() => {
-                const res = convertNFAToDFA(currentAutomaton);
+                const res = convertNFAToDFA(nfaInput);
                 setSubsetResult(res);
               }}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm transition"
+              className="flex items-center gap-2 px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-sm transition"
             >
               <Layers className="w-4 h-4" />
               Run Subset Construction
@@ -673,13 +742,13 @@ export const ConversionStudio: React.FC = () => {
               {/* Conversion Statistics */}
               <StatsGrid
                 stats={[
-                  { label: 'Original NFA States', value: currentAutomaton.states.length },
+                  { label: 'Original NFA States', value: nfaInput.states.length },
                   { label: 'Resulting DFA States', value: subsetResult.dfa.states.length },
                   { label: 'DFA Transitions', value: subsetResult.dfa.transitions.length },
                   { label: 'Accepting States', value: subsetResult.dfa.acceptStateIds.length },
                   {
                     label: 'Max Possible Subsets (2ⁿ)',
-                    value: `${Math.pow(2, currentAutomaton.states.length)} (only ${subsetResult.dfa.states.length} reachable)`,
+                    value: `${Math.pow(2, nfaInput.states.length)} (only ${subsetResult.dfa.states.length} reachable)`,
                   },
                   { label: 'Method', value: 'Subset / Powerset Construction' },
                 ]}
@@ -687,7 +756,7 @@ export const ConversionStudio: React.FC = () => {
 
               {/* Original vs Converted Verification */}
               <VerificationPanel
-                original={currentAutomaton}
+                original={nfaInput}
                 converted={subsetResult.dfa}
                 originalLabel="Original NFA"
                 convertedLabel="Converted DFA"
@@ -704,7 +773,7 @@ export const ConversionStudio: React.FC = () => {
                       <tr className="border-b border-gray-200 text-slate-600 bg-gray-50">
                         <th className="p-3 font-semibold">DFA State</th>
                         <th className="p-3 font-semibold">NFA Subset Closure</th>
-                        {currentAutomaton.alphabet.map((sym) => (
+                        {nfaInput.alphabet.map((sym) => (
                           <th key={sym} className="p-3 font-semibold">
                             Input '{sym}'
                           </th>
@@ -719,7 +788,7 @@ export const ConversionStudio: React.FC = () => {
                           <td className="p-3 text-slate-600">
                             &#123;{st.nfaStateSet.join(', ') || '∅'}&#125;
                           </td>
-                          {currentAutomaton.alphabet.map((sym) => {
+                          {nfaInput.alphabet.map((sym) => {
                             const target = st.transitions[sym];
                             return (
                               <td key={sym} className="p-3">
@@ -752,28 +821,28 @@ export const ConversionStudio: React.FC = () => {
                 </div>
               </div>
               {/* Step-by-Step Construction Walkthrough */}
-<div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm space-y-3">
-  <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-    Step-by-Step Construction Walkthrough
-  </h4>
+              <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm space-y-3">
+                <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  Step-by-Step Construction Walkthrough
+                </h4>
 
-  <div className="space-y-2">
-    {subsetResult.steps.map((st) => (
-      <div
-        key={st.step}
-        className="p-3 bg-slate-50 rounded-xl border border-gray-200 text-xs"
-      >
-        <div className="font-semibold text-amber-700 mb-1">
-          Step {st.step}: DFA state {st.dfaStateName}
-        </div>
+                <div className="space-y-2">
+                  {subsetResult.steps.map((st) => (
+                    <div
+                      key={st.step}
+                      className="p-3 bg-slate-50 rounded-xl border border-gray-200 text-xs"
+                    >
+                      <div className="font-semibold text-amber-700 mb-1">
+                        Step {st.step}: DFA state {st.dfaStateName}
+                      </div>
 
-        <div className="text-slate-700 leading-relaxed">
-          {st.explanation}
-        </div>
-      </div>
-    ))}
-  </div>
-</div>
+                      <div className="text-slate-700 leading-relaxed">
+                        {st.explanation}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
               {/* Render generated DFA */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
@@ -803,24 +872,47 @@ export const ConversionStudio: React.FC = () => {
       {/* Tab 4: DFA Minimization (Table Filling) */}
       {activeTab === 'minimize_dfa' && (
         <div className="space-y-6">
-          <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm flex items-center justify-between">
+          <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm space-y-4">
             <div>
               <h3 className="text-sm font-bold text-slate-900">
                 DFA Minimization (Hopcroft / Myhill-Nerode Table-Filling)
               </h3>
               <p className="text-xs text-slate-500">
-                Calculates distinguishable state pairs and produces minimal equivalent DFA.
+                Build or load a DFA below, then find its minimal equivalent.
               </p>
             </div>
+            <InputBuilderRow
+              regexValue={dfaMinInputBuildRegex}
+              onRegexChange={setDfaMinInputBuildRegex}
+              onBuild={() => {
+                if (dfaMinInputBuildRegex.trim()) {
+                  const { nfa } = convertRegexToNFA(dfaMinInputBuildRegex);
+                  const { dfa } = convertNFAToDFA(nfa);
+                  setDfaMinInput(dfa);
+                }
+              }}
+              onPreset={(model) => setDfaMinInput(model)}
+              placeholder="Build a (non-minimal) DFA from a regex, e.g. (a|b)*abb"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider px-1">
+              Your DFA (editable)
+            </span>
+            <AutomataCanvas automaton={dfaMinInput} onChange={setDfaMinInput} />
+          </div>
+
+          <div className="flex justify-center">
             <button
               onClick={() => {
-                const res = minimizeDFA(currentAutomaton);
+                const res = minimizeDFA(dfaMinInput);
                 setMinResult(res);
               }}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm transition"
+              className="flex items-center gap-2 px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-sm transition"
             >
               <Minimize2 className="w-4 h-4" />
-              Minimize Current DFA
+              Minimize This DFA
             </button>
           </div>
 
@@ -829,15 +921,15 @@ export const ConversionStudio: React.FC = () => {
               {/* Conversion Statistics */}
               <StatsGrid
                 stats={[
-                  { label: 'Original DFA States', value: currentAutomaton.states.length },
+                  { label: 'Original DFA States', value: dfaMinInput.states.length },
                   { label: 'Minimized DFA States', value: minResult.minimizedDfa.states.length },
-                  { label: 'States Removed', value: currentAutomaton.states.length - minResult.minimizedDfa.states.length },
+                  { label: 'States Removed', value: dfaMinInput.states.length - minResult.minimizedDfa.states.length },
                   {
                     label: 'Reduction',
                     value:
-                      currentAutomaton.states.length > 0
+                      dfaMinInput.states.length > 0
                         ? `${Math.round(
-                            (1 - minResult.minimizedDfa.states.length / currentAutomaton.states.length) * 100
+                            (1 - minResult.minimizedDfa.states.length / dfaMinInput.states.length) * 100
                           )}%`
                         : '0%',
                   },
@@ -848,7 +940,7 @@ export const ConversionStudio: React.FC = () => {
 
               {/* Original vs Converted Verification */}
               <VerificationPanel
-                original={currentAutomaton}
+                original={dfaMinInput}
                 converted={minResult.minimizedDfa}
                 originalLabel="Original DFA"
                 convertedLabel="Minimized DFA"
@@ -902,21 +994,44 @@ export const ConversionStudio: React.FC = () => {
       {/* Tab 5: DFA -> Regex (State Elimination) */}
       {activeTab === 'dfa_to_regex' && (
         <div className="space-y-6">
-          <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm flex items-center justify-between">
+          <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm space-y-4">
             <div>
               <h3 className="text-sm font-bold text-slate-900">
                 DFA to Regular Expression (State Elimination Algorithm)
               </h3>
               <p className="text-xs text-slate-500">
-                Transforms DFA into GNFA and eliminates states to extract regular expression.
+                Build or load a DFA below, then extract a regular expression describing its language.
               </p>
             </div>
+            <InputBuilderRow
+              regexValue={dfaToRegexInputBuildRegex}
+              onRegexChange={setDfaToRegexInputBuildRegex}
+              onBuild={() => {
+                if (dfaToRegexInputBuildRegex.trim()) {
+                  const { nfa } = convertRegexToNFA(dfaToRegexInputBuildRegex);
+                  const { dfa } = convertNFAToDFA(nfa);
+                  const { minimizedDfa } = minimizeDFA(dfa);
+                  setDfaToRegexInput(minimizedDfa);
+                }
+              }}
+              onPreset={(model) => setDfaToRegexInput(model)}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider px-1">
+              Your DFA (editable)
+            </span>
+            <AutomataCanvas automaton={dfaToRegexInput} onChange={setDfaToRegexInput} />
+          </div>
+
+          <div className="flex justify-center">
             <button
               onClick={() => {
-                const res = convertDFAToRegex(currentAutomaton);
+                const res = convertDFAToRegex(dfaToRegexInput);
                 setDfaToRegexResult(res);
               }}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm transition"
+              className="flex items-center gap-2 px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-sm transition"
             >
               <FileCode className="w-4 h-4" />
               Convert to Regex
@@ -928,7 +1043,7 @@ export const ConversionStudio: React.FC = () => {
               {/* Conversion Statistics */}
               <StatsGrid
                 stats={[
-                  { label: 'Original DFA States', value: currentAutomaton.states.length },
+                  { label: 'Original DFA States', value: dfaToRegexInput.states.length },
                   { label: 'Resulting Regex Length', value: dfaToRegexResult.regex.length },
                   { label: 'Elimination Steps', value: dfaToRegexResult.steps.length },
                   { label: 'Method', value: 'State Elimination (GNFA)' },
@@ -947,7 +1062,7 @@ export const ConversionStudio: React.FC = () => {
               {/* Original vs Converted Verification (round-trip: re-parse the derived regex) */}
               {dfaToRegexResult.regex !== '∅' ? (
                 <VerificationPanel
-                  original={currentAutomaton}
+                  original={dfaToRegexInput}
                   converted={convertRegexToNFA(dfaToRegexResult.regex).nfa}
                   originalLabel="Original DFA"
                   convertedLabel="Regex (re-parsed)"

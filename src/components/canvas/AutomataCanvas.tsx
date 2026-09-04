@@ -29,11 +29,58 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
   const [connectSourceId, setConnectSourceId] = useState<string | null>(null);
 
   // Zoom & Pan
-    // Zoom & Pan
   const [zoom, setZoom] = useState<number>(1);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // Multi-touch tracking for pinch-to-zoom. Tracked outside React state
+  // (refs) since these update every touchmove frame and don't need to
+  // trigger re-renders themselves — only the zoom/pan state they compute
+  // does.
+  const activePointers = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinchState = useRef<{
+    startDist: number;
+    startZoom: number;
+    worldX: number;
+    worldY: number;
+  } | null>(null);
+
+  const getDistance = (pts: { x: number; y: number }[]) => Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+  const getMidpoint = (pts: { x: number; y: number }[]) => ({
+    x: (pts[0].x + pts[1].x) / 2,
+    y: (pts[0].y + pts[1].y) / 2,
+  });
+
+  // Registers a pointer (finger/mouse/pen) and, if this is the second
+  // simultaneous pointer, starts a pinch-zoom gesture. We capture the
+  // WORLD-space point under the starting midpoint once — the screen-space
+  // midpoint is recomputed live from current finger positions on every
+  // move, which is what makes combined two-finger pan+zoom feel natural
+  // (drag two fingers together to pan, spread them to zoom), not just a
+  // zoom anchored to a single fixed point.
+  // Returns true if the caller should skip its normal drag/pan/select
+  // logic (a pinch just started, or a 3rd+ touch should be ignored).
+  const registerPointerAndCheckPinch = (e: React.PointerEvent): boolean => {
+    activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (activePointers.current.size === 2) {
+      setIsPanning(false);
+      setDraggingStateId(null);
+      const pts = Array.from(activePointers.current.values());
+      const mid = getMidpoint(pts);
+      const rect = containerRef.current?.getBoundingClientRect();
+      const midLocalX = rect ? mid.x - rect.left : mid.x;
+      const midLocalY = rect ? mid.y - rect.top : mid.y;
+      pinchState.current = {
+        startDist: getDistance(pts) || 1,
+        startZoom: zoom,
+        worldX: (midLocalX - pan.x) / zoom,
+        worldY: (midLocalY - pan.y) / zoom,
+      };
+      return true;
+    }
+    return activePointers.current.size > 2;
+  };
 
   // Fit all states into the visible canvas area by computing a bounding box
   // of every state's (x, y) and choosing a zoom/pan that centers it.
@@ -71,21 +118,30 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
     });
   };
 
-  // Auto-fit whenever the number of states changes (states added/removed,
-  // or a freshly converted/loaded automaton) — not on every drag, since
-  // dragging changes x/y but not the count, and we don't want to yank the
-  // view out from under someone mid-drag.
+  // Auto-fit whenever the SET of states changes — not just the count, but
+  // which states exist (loading a different automaton can coincidentally
+  // have the same state count as whatever was there before, e.g. swapping
+  // between two 4-state DFAs, and that still needs to re-center) — and not
+  // on every drag, since dragging changes x/y but not which states exist,
+  // and we don't want to yank the view out from under someone mid-drag.
+  const stateIdentitySignature = automaton.states.map((s) => s.id).join(',');
   useEffect(() => {
     fitToScreen();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [automaton.states.length]);
+  }, [stateIdentitySignature]);
 
   // Modal / Inputs for editing transition
   const [editingTransition, setEditingTransition] = useState<TransitionEdge | null>(null);
   const [transitionSymbolsInput, setTransitionSymbolsInput] = useState('');
 
-  // Handle canvas mouse events for panning
-  const handleMouseDown = (e: React.MouseEvent) => {
+  // Handle canvas pointer events for panning, dragging, and pinch-zoom.
+  // Pointer Events unify mouse, touch, and pen under one API — this is
+  // what makes the canvas work on a phone without a separate touch
+  // implementation.
+  const handlePointerDown = (e: React.PointerEvent) => {
+    containerRef.current?.setPointerCapture(e.pointerId);
+    if (registerPointerAndCheckPinch(e)) return;
+
     if (e.target === containerRef.current || (e.target as HTMLElement).tagName === 'svg') {
       setIsPanning(true);
       setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
@@ -95,7 +151,34 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
     }
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (activePointers.current.has(e.pointerId)) {
+      activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+
+    // Two fingers down: pinch-to-zoom, anchored so the world-space point
+    // captured at gesture start stays under the fingers' CURRENT midpoint
+    // — this is what lets you pan and zoom together in one gesture.
+    if (activePointers.current.size === 2 && pinchState.current) {
+      const pts = Array.from(activePointers.current.values());
+      const newDist = getDistance(pts);
+      const scaleRatio = newDist / pinchState.current.startDist;
+      const nextZoom = Math.min(2, Math.max(0.05, pinchState.current.startZoom * scaleRatio));
+
+      const mid = getMidpoint(pts);
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (rect) {
+        const midLocalX = mid.x - rect.left;
+        const midLocalY = mid.y - rect.top;
+        setZoom(nextZoom);
+        setPan({
+          x: midLocalX - pinchState.current.worldX * nextZoom,
+          y: midLocalY - pinchState.current.worldY * nextZoom,
+        });
+      }
+      return;
+    }
+
     if (isPanning) {
       setPan({ x: e.clientX - panStart.x, y: e.clientY - panStart.y });
     } else if (draggingStateId) {
@@ -116,14 +199,24 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
     }
   };
 
-  const handleMouseUp = () => {
+  const handlePointerUp = (e: React.PointerEvent) => {
+    activePointers.current.delete(e.pointerId);
+    if (activePointers.current.size < 2) {
+      pinchState.current = null;
+    }
+    if (containerRef.current?.hasPointerCapture(e.pointerId)) {
+      containerRef.current.releasePointerCapture(e.pointerId);
+    }
     setIsPanning(false);
     setDraggingStateId(null);
   };
 
   // State interaction
-  const handleStateMouseDown = (st: StateNode, e: React.MouseEvent) => {
+  const handleStatePointerDown = (st: StateNode, e: React.PointerEvent) => {
     e.stopPropagation();
+    containerRef.current?.setPointerCapture(e.pointerId);
+    if (registerPointerAndCheckPinch(e)) return;
+
     if (connectSourceId) {
       // Create transition from connectSourceId to st.id
       createTransition(connectSourceId, st.id);
@@ -357,7 +450,7 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
   const selectedState = automaton.states.find((s) => s.id === selectedStateId);
 
   return (
-    <div className="relative w-full h-[70vh] min-h-[560px] bg-white rounded-2xl border border-gray-200 overflow-hidden flex flex-col select-none shadow-sm">
+    <div className="relative w-full h-[85vh] min-h-[720px] bg-white rounded-2xl border border-gray-200 overflow-hidden flex flex-col select-none shadow-sm">
       {/* Top Toolbar */}
       <div className="flex items-center justify-between px-4 py-2.5 bg-white border-b border-gray-200 z-20">
         <div className="flex items-center gap-2">
@@ -391,7 +484,7 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
 
           <div className="h-4 w-px bg-gray-200 mx-1" />
 
-                    {/* Zoom controls */}
+          {/* Zoom controls */}
           <button
             onClick={() => setZoom((z) => Math.min(2, z + 0.15))}
             className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-gray-100 transition"
@@ -429,9 +522,11 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
       {/* Main Canvas Area */}
       <div
         ref={containerRef}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        style={{ touchAction: 'none' }}
         className="flex-1 w-full h-full relative cursor-grab active:cursor-grabbing overflow-hidden bg-slate-50/50 bg-[radial-gradient(#cbd5e1_1px,transparent_1px)] [background-size:20px_20px]"
       >
         <svg
@@ -480,7 +575,7 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
               <g
                 key={st.id}
                 transform={`translate(${st.x}, ${st.y})`}
-                onMouseDown={(e) => handleStateMouseDown(st, e)}
+                onPointerDown={(e) => handleStatePointerDown(st, e)}
                 className="cursor-pointer group"
               >
                 {/* Start Arrow */}
