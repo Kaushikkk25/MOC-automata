@@ -235,6 +235,7 @@ export function checkAutomataEquivalence(
 
   return { equivalent: true, counterexample: null, acceptedByA: false, acceptedByB: false };
 }
+
 // Enumerate short strings over an automaton's alphabet and pick a
 // representative, mostly-short sample of accepted/rejected ones — used
 // wherever we need a quick illustrative test set for a given automaton
@@ -521,8 +522,9 @@ export function convertRegexToNFA(regexStr: string): {
   const postfix = infixToPostfix(cleanRegex);
   const { automaton, steps } = buildNFAFromPostfix(postfix);
 
-  // Layout states neatly in grid
-  layoutNFAStates(automaton.states);
+  // Layout states left-to-right by actual distance from start, not by
+  // internal creation order.
+  layoutNFAStates(automaton.states, automaton.transitions, automaton.startStateId);
   return { nfa: automaton, steps };
 }
 
@@ -756,17 +758,63 @@ function buildNFAFromPostfix(postfix: string): {
   return { automaton, steps };
 }
 
-function layoutNFAStates(states: StateNode[]) {
-  const count = states.length;
-  const cols = Math.ceil(Math.sqrt(count * 1.6));
-  const spacingX = 140;
-  const spacingY = 120;
+function layoutNFAStates(states: StateNode[], transitions: TransitionEdge[], startStateId: string) {
+  const spacingX = 160;
+  const spacingY = 110;
 
-  states.forEach((st, idx) => {
-    const col = idx % cols;
-    const row = Math.floor(idx / cols);
-    st.x = 80 + col * spacingX;
-    st.y = 80 + row * spacingY;
+  // BFS from the start state assigns each state a "level" — its shortest
+  // distance from start, following transitions in their natural direction.
+  // Placing states by level (left-to-right) instead of by internal
+  // creation order is what actually makes these diagrams readable: the
+  // graph is exactly as correct either way, but a creation-order grid
+  // makes edges crisscross confusingly even for a perfectly correct
+  // automaton, since Thompson's construction and subset construction both
+  // create states in an order that has nothing to do with visual flow.
+  const levelOf = new Map<string, number>();
+  const queue: string[] = [startStateId];
+  levelOf.set(startStateId, 0);
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    const level = levelOf.get(current)!;
+    for (const t of transitions) {
+      if (t.from === current && !levelOf.has(t.to)) {
+        levelOf.set(t.to, level + 1);
+        queue.push(t.to);
+      }
+    }
+  }
+
+  // Anything unreachable from start (shouldn't normally happen) still
+  // gets placed, just after the furthest reachable level.
+  let maxLevel = 0;
+  for (const lvl of levelOf.values()) maxLevel = Math.max(maxLevel, lvl);
+  states.forEach((st) => {
+    if (!levelOf.has(st.id)) {
+      maxLevel += 1;
+      levelOf.set(st.id, maxLevel);
+    }
+  });
+
+  // Group states by level, then stack each level's states vertically,
+  // centered on a common midline.
+  const byLevel = new Map<number, StateNode[]>();
+  states.forEach((st) => {
+    const lvl = levelOf.get(st.id)!;
+    if (!byLevel.has(lvl)) byLevel.set(lvl, []);
+    byLevel.get(lvl)!.push(st);
+  });
+
+  const maxCountAtAnyLevel = Math.max(1, ...Array.from(byLevel.values()).map((arr) => arr.length));
+  const totalHeight = (maxCountAtAnyLevel - 1) * spacingY;
+
+  byLevel.forEach((levelStates, level) => {
+    const levelHeight = (levelStates.length - 1) * spacingY;
+    const yOffset = (totalHeight - levelHeight) / 2;
+    levelStates.forEach((st, idx) => {
+      st.x = 80 + level * spacingX;
+      st.y = 80 + yOffset + idx * spacingY;
+    });
   });
 }
 
@@ -930,12 +978,11 @@ steps.push({
   explanation,
 });
   }
-  // Re-layout all discovered DFA states into a compact, roughly-square grid
-  // sized to the actual total count. The fixed 4-column grid assigned above
-  // during the BFS gets absurdly tall (and hard to fit on screen) once
-  // there are 50+ states — this mirrors the sqrt-based layout already used
-  // for Thompson's construction (layoutNFAStates).
-  layoutNFAStates(dfaStates);
+  // Re-layout all discovered DFA states left-to-right by distance from the
+  // start state, instead of the fixed 4-column grid assigned above during
+  // the BFS — a plain grid gets absurdly tall (and hard to fit on screen)
+  // once there are 50+ states, and doesn't reflect the actual graph flow.
+  layoutNFAStates(dfaStates, dfaTransitions, startDfaName);
 
   const dfa: AutomatonDefinition = {
     type: 'DFA',
@@ -1049,12 +1096,12 @@ export function minimizeDFA(dfa: AutomatonDefinition): {
               table[p][q_] = true;
               table[q_][p] = true;
               changed = true;
-                break;
-              }
+              break;
             }
           }
         }
       }
+    }
 
     if (changed) {
       steps.push({
@@ -1100,8 +1147,8 @@ export function minimizeDFA(dfa: AutomatonDefinition): {
     minStates.push({
       id: newId,
       name: newName,
-      x: 120 + (idx % 3) * 180,
-      y: 120 + Math.floor(idx / 3) * 150,
+      x: 0,
+      y: 0,
       isStart,
       isAccept,
     });
@@ -1133,6 +1180,12 @@ export function minimizeDFA(dfa: AutomatonDefinition): {
 
   const startStateId = stateMapping.get(dfa.startStateId) || minStates[0]?.id || '';
   const acceptStateIds = minStates.filter((s) => s.isAccept).map((s) => s.id);
+
+  // Lay out left-to-right by real distance from start, same as every other
+  // automaton diagram in the app — previously this used its own separate
+  // grid based on equivalence-group processing order, which had nothing to
+  // do with actual graph flow.
+  layoutNFAStates(minStates, minTransitions, startStateId);
 
   const minimizedDfa: AutomatonDefinition = {
     type: 'DFA',

@@ -88,10 +88,15 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect || rect.width === 0 || rect.height === 0 || automaton.states.length === 0) return;
 
-    // Padding accounts for state radius, the START arrow (extends ~48px left
-    // of the start state), self-loop curves (~50px above a state), and
-    // transition label pills.
-    const PADDING = 90;
+    // Padding must cover the widest thing that can stick out past a
+    // state's own circle. The START label is the worst case: its group is
+    // shifted -48 from the state, and inside that the text itself (right-
+    // anchored at x=-18, ~30px wide for "START" in 10px mono) extends
+    // further left — roughly 96-100px total past the start state's actual
+    // x position, not just the ~48px the group shift alone would suggest.
+    // Self-loop curves (~50px above a state) and transition label pills
+    // need similar room on other sides.
+    const PADDING = 130;
     const xs = automaton.states.map((s) => s.x);
     const ys = automaton.states.map((s) => s.y);
     const minX = Math.min(...xs) - PADDING;
@@ -460,7 +465,7 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
   const selectedState = automaton.states.find((s) => s.id === selectedStateId);
 
   return (
-    <div className="relative w-full h-[85vh] min-h-[720px] bg-white rounded-2xl border border-gray-200 overflow-hidden flex flex-col select-none shadow-sm">
+    <div className="relative w-full h-[90vh] min-h-[800px] bg-white rounded-2xl border border-gray-200 overflow-hidden flex flex-col select-none shadow-sm">
       {/* Top Toolbar */}
       <div className="flex items-center justify-between px-4 py-2.5 bg-white border-b border-gray-200 z-20">
         <div className="flex items-center gap-2">
@@ -497,21 +502,21 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
           {/* Zoom controls */}
           <button
             onClick={() => setZoom((z) => Math.min(2, z + 0.15))}
-            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-gray-100 transition"
+            className="p-2 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-gray-100 transition"
             title="Zoom In"
           >
             <ZoomIn className="w-4 h-4" />
           </button>
           <button
             onClick={() => setZoom((z) => Math.max(0.05, z - 0.15))}
-            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-gray-100 transition"
+            className="p-2 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-gray-100 transition"
             title="Zoom Out"
           >
             <ZoomOut className="w-4 h-4" />
           </button>
           <button
             onClick={fitToScreen}
-            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-gray-100 transition"
+            className="p-2 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-gray-100 transition"
             title="Fit to Screen"
           >
             <Maximize2 className="w-4 h-4" />
@@ -521,7 +526,7 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
               setZoom(1);
               setPan({ x: 0, y: 0 });
             }}
-            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-gray-100 transition"
+            className="p-2 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-gray-100 transition"
             title="Reset to 100% (no auto-fit)"
           >
             <RotateCcw className="w-4 h-4" />
@@ -669,7 +674,7 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
             <div className="flex items-center gap-1.5">
               <button
                 onClick={() => setStartState(selectedState.id)}
-                className={`text-xs px-2.5 py-1 rounded-md transition ${
+                className={`text-xs px-2.5 py-2 rounded-md transition ${
                   selectedState.id === automaton.startStateId
                     ? 'bg-indigo-100 text-indigo-700 font-semibold border border-indigo-200'
                     : 'bg-gray-100 hover:bg-gray-200 text-slate-700'
@@ -680,7 +685,7 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
 
               <button
                 onClick={() => toggleAcceptState(selectedState.id)}
-                className={`text-xs px-2.5 py-1 rounded-md transition ${
+                className={`text-xs px-2.5 py-2 rounded-md transition ${
                   automaton.acceptStateIds.includes(selectedState.id)
                     ? 'bg-emerald-100 text-emerald-700 font-semibold border border-emerald-200'
                     : 'bg-gray-100 hover:bg-gray-200 text-slate-700'
@@ -691,7 +696,7 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
 
               <button
                 onClick={() => setConnectSourceId(selectedState.id)}
-                className={`text-xs px-2.5 py-1 rounded-md transition ${
+                className={`text-xs px-2.5 py-2 rounded-md transition ${
                   connectSourceId === selectedState.id
                     ? 'bg-amber-100 text-amber-800 font-semibold border border-amber-300'
                     : 'bg-gray-100 hover:bg-gray-200 text-indigo-700 font-medium'
@@ -702,7 +707,7 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
 
               <button
                 onClick={() => deleteState(selectedState.id)}
-                className="p-1 rounded-md text-red-600 hover:bg-red-50 hover:text-red-700 transition ml-1"
+                className="p-2 rounded-md text-red-600 hover:bg-red-50 hover:text-red-700 transition ml-1"
                 title="Delete state"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -720,7 +725,7 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
               </span>
               <button
                 onClick={() => deleteTransition(editingTransition.id)}
-                className="text-xs text-red-500 hover:text-red-700 p-1"
+                className="text-xs text-red-500 hover:text-red-700 p-2"
                 title="Delete Transition"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -745,13 +750,13 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
               <div className="flex items-center justify-end gap-2 pt-1">
                 <button
                   onClick={() => setEditingTransition(null)}
-                  className="text-xs px-2.5 py-1 rounded bg-gray-100 text-slate-600 hover:bg-gray-200"
+                  className="text-xs px-3 py-2 rounded bg-gray-100 text-slate-600 hover:bg-gray-200"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={saveTransitionSymbols}
-                  className="text-xs px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-700 text-white font-medium shadow-sm"
+                  className="text-xs px-3.5 py-2 rounded bg-indigo-600 hover:bg-indigo-700 text-white font-medium shadow-sm"
                 >
                   Save
                 </button>

@@ -671,19 +671,30 @@ export const ConversionStudio: React.FC = () => {
               </div>
 
               <div className="space-y-4">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-2">
                   <span className="text-xs font-semibold text-slate-700">
                     Generated Thompson NFA ({thompsonResult.nfa.states.length} states, {thompsonResult.nfa.transitions.length} transitions)
                   </span>
-                  <button
-                    onClick={() => {
-                      setCurrentAutomaton(thompsonResult.nfa);
-                      setActiveTab('simulate');
-                    }}
-                    className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition"
-                  >
-                    Load in Interactive Tracer →
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setNfaInput(thompsonResult.nfa);
+                        setActiveTab('nfa_to_dfa');
+                      }}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition flex items-center gap-1"
+                    >
+                      Convert to DFA <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        setCurrentAutomaton(thompsonResult.nfa);
+                        setActiveTab('simulate');
+                      }}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition"
+                    >
+                      Load in Interactive Tracer →
+                    </button>
+                  </div>
                 </div>
                 <AutomataCanvas
                   automaton={thompsonResult.nfa}
@@ -845,19 +856,39 @@ export const ConversionStudio: React.FC = () => {
               </div>
               {/* Render generated DFA */}
               <div className="space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-2">
                   <h4 className="text-xs font-semibold text-slate-700">
                     Constructed Deterministic Finite Automaton (DFA)
                   </h4>
-                  <button
-                    onClick={() => {
-                      setCurrentAutomaton(subsetResult.dfa);
-                      setActiveTab('simulate');
-                    }}
-                    className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition"
-                  >
-                    Load in Tracer →
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setDfaMinInput(subsetResult.dfa);
+                        setActiveTab('minimize_dfa');
+                      }}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition flex items-center gap-1"
+                    >
+                      Minimize This DFA <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        setDfaToRegexInput(subsetResult.dfa);
+                        setActiveTab('dfa_to_regex');
+                      }}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition flex items-center gap-1"
+                    >
+                      Convert to Regex <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        setCurrentAutomaton(subsetResult.dfa);
+                        setActiveTab('simulate');
+                      }}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition"
+                    >
+                      Load in Tracer →
+                    </button>
+                  </div>
                 </div>
                 <AutomataCanvas
                   automaton={subsetResult.dfa}
@@ -967,19 +998,30 @@ export const ConversionStudio: React.FC = () => {
 
               {/* Render Minimized DFA */}
               <div className="space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-2">
                   <h4 className="text-xs font-semibold text-slate-700">
                     Minimal DFA ({minResult.minimizedDfa.states.length} states)
                   </h4>
-                  <button
-                    onClick={() => {
-                      setCurrentAutomaton(minResult.minimizedDfa);
-                      setActiveTab('simulate');
-                    }}
-                    className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition"
-                  >
-                    Load Minimal DFA in Tracer →
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setDfaToRegexInput(minResult.minimizedDfa);
+                        setActiveTab('dfa_to_regex');
+                      }}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition flex items-center gap-1"
+                    >
+                      Convert to Regex <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        setCurrentAutomaton(minResult.minimizedDfa);
+                        setActiveTab('simulate');
+                      }}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition"
+                    >
+                      Load Minimal DFA in Tracer →
+                    </button>
+                  </div>
                 </div>
                 <AutomataCanvas
                   automaton={minResult.minimizedDfa}
@@ -1050,10 +1092,24 @@ export const ConversionStudio: React.FC = () => {
                 ]}
               />
 
-              <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
-                <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
-                  Final Derived Regular Expression:
-                </h4>
+              <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm space-y-3">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    Final Derived Regular Expression:
+                  </h4>
+                  {dfaToRegexResult.regex !== '∅' && (
+                    <button
+                      onClick={() => {
+                        setRegexInput(dfaToRegexResult.regex);
+                        setThompsonResult(convertRegexToNFA(dfaToRegexResult.regex));
+                        setActiveTab('regex_to_nfa');
+                      }}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition flex items-center gap-1"
+                    >
+                      Convert Back to NFA <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
                 <div className="p-4 bg-slate-50 rounded-xl border border-indigo-200 font-mono text-base text-indigo-700 font-bold break-all">
                   {dfaToRegexResult.regex}
                 </div>
