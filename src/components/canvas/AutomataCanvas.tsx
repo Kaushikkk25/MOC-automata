@@ -139,10 +139,20 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
   // what makes the canvas work on a phone without a separate touch
   // implementation.
   const handlePointerDown = (e: React.PointerEvent) => {
-    containerRef.current?.setPointerCapture(e.pointerId);
-    if (registerPointerAndCheckPinch(e)) return;
+    // Only capture the pointer for gestures we're actually going to track
+    // ourselves below (a confirmed pan on empty canvas, or a pinch
+    // starting). Capturing unconditionally here was redirecting clicks on
+    // the floating action bar's plain buttons (Set as Start, Make Accept,
+    // + Transition) — those buttons live inside this same container, so
+    // their pointerdown bubbles up here too, and capturing it broke the
+    // browser's normal click synthesis for them.
+    if (registerPointerAndCheckPinch(e)) {
+      containerRef.current?.setPointerCapture(e.pointerId);
+      return;
+    }
 
     if (e.target === containerRef.current || (e.target as HTMLElement).tagName === 'svg') {
+      containerRef.current?.setPointerCapture(e.pointerId);
       setIsPanning(true);
       setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
       setSelectedStateId(null);
