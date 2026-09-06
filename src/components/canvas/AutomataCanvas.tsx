@@ -130,10 +130,19 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
   // on every drag, since dragging changes x/y but not which states exist,
   // and we don't want to yank the view out from under someone mid-drag.
   const stateIdentitySignature = automaton.states.map((s) => s.id).join(',');
-  useEffect(() => {
-    fitToScreen();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stateIdentitySignature]);
+useEffect(() => {
+  let raf2 = 0;
+  const raf1 = requestAnimationFrame(() => {
+    raf2 = requestAnimationFrame(() => {
+      fitToScreen();
+    });
+  });
+  return () => {
+    cancelAnimationFrame(raf1);
+    if (raf2) cancelAnimationFrame(raf2);
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [stateIdentitySignature]);
 
   // Modal / Inputs for editing transition
   const [editingTransition, setEditingTransition] = useState<TransitionEdge | null>(null);
