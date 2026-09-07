@@ -1260,6 +1260,123 @@ export function minimizeDFA(dfa: AutomatonDefinition): {
 }
 
 // -------------------------------------------------------------
+// REGEX AST — used by state elimination to keep every intermediate
+// expression in a proper algebraic form (rather than raw strings), so
+// standard regex identities can be applied exactly once, correctly,
+// instead of via ad-hoc string pattern matching. This is what lets the
+// final serialization emit only the parentheses actually required by
+// precedence, instead of wrapping almost everything defensively.
+// -------------------------------------------------------------
+type RegexNode =
+  | { kind: 'empty' } // ∅ — the empty language
+  | { kind: 'epsilon' } // ε — matches only the empty string
+  | { kind: 'symbol'; value: string }
+  | { kind: 'concat'; parts: RegexNode[] } // flattened, order-sensitive
+  | { kind: 'union'; parts: RegexNode[] } // flattened, order-insensitive
+  | { kind: 'star'; inner: RegexNode };
+
+const RE_EMPTY: RegexNode = { kind: 'empty' };
+const RE_EPSILON: RegexNode = { kind: 'epsilon' };
+
+// A canonical (fully parenthesized, order-normalized-for-union) string key
+// used only to detect duplicate branches — not for display.
+function regexCanonicalKey(node: RegexNode): string {
+  switch (node.kind) {
+    case 'empty':
+      return '∅';
+    case 'epsilon':
+      return 'ε';
+    case 'symbol':
+      return node.value;
+    case 'star':
+      return `(${regexCanonicalKey(node.inner)})*`;
+    case 'concat':
+      return node.parts.map(regexCanonicalKey).join('.');
+    case 'union':
+      return `{${node.parts.map(regexCanonicalKey).sort().join('|')}}`;
+  }
+}
+
+// Union identities: ∅ is the identity element, union is idempotent
+// (R|R = R), and union is commutative — so duplicate branches (which the
+// elimination algorithm naturally produces from symmetric paths) collapse
+// away instead of accumulating as visual clutter.
+function regexUnion(a: RegexNode, b: RegexNode): RegexNode {
+  if (a.kind === 'empty') return b;
+  if (b.kind === 'empty') return a;
+  const partsA = a.kind === 'union' ? a.parts : [a];
+  const partsB = b.kind === 'union' ? b.parts : [b];
+  const seen = new Map<string, RegexNode>();
+  for (const p of [...partsA, ...partsB]) {
+    const key = regexCanonicalKey(p);
+    if (!seen.has(key)) seen.set(key, p);
+  }
+  const uniqueParts = Array.from(seen.values());
+  return uniqueParts.length === 1 ? uniqueParts[0] : { kind: 'union', parts: uniqueParts };
+}
+
+// Concat identities: ε is the identity element, ∅ is absorbing
+// (concatenating with the empty language is still the empty language).
+function regexConcat(a: RegexNode, b: RegexNode): RegexNode {
+  if (a.kind === 'empty' || b.kind === 'empty') return RE_EMPTY;
+  if (a.kind === 'epsilon') return b;
+  if (b.kind === 'epsilon') return a;
+  const partsA = a.kind === 'concat' ? a.parts : [a];
+  const partsB = b.kind === 'concat' ? b.parts : [b];
+  return { kind: 'concat', parts: [...partsA, ...partsB] };
+}
+
+// Star identities: ∅* = ε (zero-or-more repetitions of nothing is just
+// the empty string), ε* = ε, and (R*)* = R* (double-star collapses).
+function regexStar(a: RegexNode): RegexNode {
+  if (a.kind === 'empty' || a.kind === 'epsilon') return RE_EPSILON;
+  if (a.kind === 'star') return a;
+  return { kind: 'star', inner: a };
+}
+
+function regexPrecedence(node: RegexNode): number {
+  switch (node.kind) {
+    case 'union':
+      return 1;
+    case 'concat':
+      return 2;
+    case 'star':
+      return 3;
+    default:
+      return 4; // symbol, epsilon, empty — always atomic
+  }
+}
+
+// Serializes to this app's own regex syntax (symbols, |, *, implicit
+// concatenation, and parentheses) — adding parentheses only where the
+// child's precedence is actually too low for its position, not
+// defensively around every sub-expression.
+function serializeRegexNode(node: RegexNode, minPrec: number = 0): string {
+  let s: string;
+  switch (node.kind) {
+    case 'empty':
+      s = '∅';
+      break;
+    case 'epsilon':
+      s = 'ε';
+      break;
+    case 'symbol':
+      s = node.value;
+      break;
+    case 'star':
+      s = `${serializeRegexNode(node.inner, 3)}*`;
+      break;
+    case 'concat':
+      s = node.parts.map((p) => serializeRegexNode(p, 2)).join('');
+      break;
+    case 'union':
+      s = node.parts.map((p) => serializeRegexNode(p, 1)).join('|');
+      break;
+  }
+  return regexPrecedence(node) < minPrec ? `(${s})` : s;
+}
+
+// -------------------------------------------------------------
 // STATE ELIMINATION (DFA -> REGEX)
 // -------------------------------------------------------------
 export function convertDFAToRegex(dfa: AutomatonDefinition): {
@@ -1275,32 +1392,43 @@ export function convertDFAToRegex(dfa: AutomatonDefinition): {
   const gnfaAccept = 'Q_ACCEPT';
 
   const allNodes = [gnfaStart, ...stateIds, gnfaAccept];
-  const R: Record<string, Record<string, string>> = {};
+  const R: Record<string, Record<string, RegexNode>> = {};
 
   for (const u of allNodes) {
     R[u] = {};
     for (const v of allNodes) {
-      R[u][v] = '∅';
+      R[u][v] = RE_EMPTY;
     }
   }
 
   // Base transitions from DFA
   for (const t of dfa.transitions) {
-    const symExpr = t.symbols.join('|');
-    if (R[t.from][t.to] === '∅') {
-      R[t.from][t.to] = symExpr;
-    } else {
-      R[t.from][t.to] = `(${R[t.from][t.to]}|${symExpr})`;
-    }
+    const symNode: RegexNode = t.symbols
+      .map((sym): RegexNode => ({ kind: 'symbol', value: sym }))
+      .reduce((acc, s) => regexUnion(acc, s));
+    R[t.from][t.to] = regexUnion(R[t.from][t.to], symNode);
   }
 
   // Start transition
-  R[gnfaStart][dfa.startStateId] = 'ε';
+  R[gnfaStart][dfa.startStateId] = regexUnion(R[gnfaStart][dfa.startStateId], RE_EPSILON);
 
   // Accept transitions
   for (const accId of dfa.acceptStateIds) {
-    R[accId][gnfaAccept] = 'ε';
+    R[accId][gnfaAccept] = regexUnion(R[accId][gnfaAccept], RE_EPSILON);
   }
+
+  // Snapshot R (as strings, for the existing step-by-step display) at a
+  // point in the algorithm.
+  const snapshotR = (): Record<string, Record<string, string>> => {
+    const snap: Record<string, Record<string, string>> = {};
+    for (const u of Object.keys(R)) {
+      snap[u] = {};
+      for (const v of Object.keys(R[u])) {
+        snap[u][v] = serializeRegexNode(R[u][v]);
+      }
+    }
+    return snap;
+  };
 
   let remaining = [...stateIds];
   let stepCounter = 1;
@@ -1309,7 +1437,7 @@ export function convertDFAToRegex(dfa: AutomatonDefinition): {
     step: 0,
     eliminatedState: 'Initial GNFA setup',
     remainingStates: remaining,
-    transitionsRegex: JSON.parse(JSON.stringify(R)),
+    transitionsRegex: snapshotR(),
     explanation: `Added new start state ${gnfaStart} and accept state ${gnfaAccept}.`,
   });
 
@@ -1320,26 +1448,13 @@ export function convertDFAToRegex(dfa: AutomatonDefinition): {
 
     for (const i of activeCurrent) {
       for (const j of activeCurrent) {
-        const Rij = R[i][j];
         const Rik = R[i][k];
         const Rkk = R[k][k];
         const Rkj = R[k][j];
 
-        if (Rik !== '∅' && Rkj !== '∅') {
-          let bypass = '';
-          const rkkStar = Rkk === '∅' || Rkk === 'ε' ? '' : `(${Rkk})*`;
-          const left = Rik === 'ε' ? '' : Rik.length > 1 ? `(${Rik})` : Rik;
-          const right = Rkj === 'ε' ? '' : Rkj.length > 1 ? `(${Rkj})` : Rkj;
-
-          bypass = `${left}${rkkStar}${right}` || 'ε';
-
-          if (Rij === '∅') {
-            R[i][j] = bypass;
-          } else if (Rij === 'ε' && bypass === 'ε') {
-            R[i][j] = 'ε';
-          } else {
-            R[i][j] = `(${Rij}|${bypass})`;
-          }
+        if (Rik.kind !== 'empty' && Rkj.kind !== 'empty') {
+          const bypass = regexConcat(regexConcat(Rik, regexStar(Rkk)), Rkj);
+          R[i][j] = regexUnion(R[i][j], bypass);
         }
       }
     }
@@ -1348,24 +1463,14 @@ export function convertDFAToRegex(dfa: AutomatonDefinition): {
       step: stepCounter++,
       eliminatedState: getStateName(dfa, k),
       remainingStates: remaining,
-      transitionsRegex: JSON.parse(JSON.stringify(R)),
+      transitionsRegex: snapshotR(),
       explanation: `Eliminated state ${getStateName(dfa, k)} using rule R_ij = R_ij ∪ (R_ik)(R_kk)*(R_kj)`,
     });
   }
 
-  const rawRegex = R[gnfaStart][gnfaAccept] || '∅';
-  const cleanRegex = simplifyRegex(rawRegex);
+  const regex = serializeRegexNode(R[gnfaStart][gnfaAccept]);
 
-  return { regex: cleanRegex, steps };
-}
-
-function simplifyRegex(expr: string): string {
-  return expr
-    .replace(/\(ε\)/g, 'ε')
-    .replace(/ε\*/g, 'ε')
-    .replace(/∅\|/g, '')
-    .replace(/\|∅/g, '')
-    .replace(/\(∅\)/g, '∅');
+  return { regex, steps };
 }
 
 // -------------------------------------------------------------
