@@ -32,7 +32,9 @@ import {
   Network,
   BarChart3,
   Scale,
-  GitCompareArrows
+  GitCompareArrows,
+  Plus,
+  X
 } from 'lucide-react';
 
 // Small reusable stat tile grid — used after every conversion to show
@@ -137,6 +139,28 @@ const VerificationPanel: React.FC<{
     </div>
   );
 };
+
+// The studio supports up to five INDEPENDENT conversion cases. A case is a
+// complete, self-contained test case: its own regex, its own input automata
+// for each conversion tab, and its own results. Cases never share objects,
+// so identical state ids (q0, q1, ...) across cases are unambiguous.
+const MAX_CASES = 5;
+
+interface ConversionCase {
+  id: string;
+  name: string;
+  regexInput: string;
+  thompsonResult: ReturnType<typeof convertRegexToNFA> | null;
+  nfaInput: AutomatonDefinition;
+  nfaInputBuildRegex: string;
+  subsetResult: ReturnType<typeof convertNFAToDFA> | null;
+  dfaMinInput: AutomatonDefinition;
+  dfaMinInputBuildRegex: string;
+  minResult: ReturnType<typeof minimizeDFA> | null;
+  dfaToRegexInput: AutomatonDefinition;
+  dfaToRegexInputBuildRegex: string;
+  dfaToRegexResult: ReturnType<typeof convertDFAToRegex> | null;
+}
 
 // Preset dropdown + "build from regex" quick action, used above every
 // embedded canvas so each conversion tab can seed its own input without
@@ -292,26 +316,83 @@ export const ConversionStudio: React.FC = () => {
     acceptStateIds: [],
   });
 
-  // Regex -> NFA
-  const [regexInput, setRegexInput] = useState('(a|b)*abb');
-  const [thompsonResult, setThompsonResult] = useState<ReturnType<typeof convertRegexToNFA> | null>(null);
+  // ---------------------------------------------------------------
+  // FIVE INDEPENDENT CONVERSION CASES
+  // ---------------------------------------------------------------
+  // Every piece of per-conversion state lives inside a ConversionCase, and
+  // the studio holds an ARRAY of 1..5 of them. Isolation comes from the
+  // update helper below never touching any index except the active one, and
+  // from each case owning its own automaton objects (deep-copied on create),
+  // so two cases can safely reuse the same state ids like q0/q1.
+  const emptyCase = (name: string): ConversionCase => ({
+    id: `case_${Math.random().toString(36).slice(2, 9)}`,
+    name,
+    regexInput: '(a|b)*abb',
+    thompsonResult: null,
+    nfaInput: blankAutomaton(),
+    nfaInputBuildRegex: '',
+    subsetResult: null,
+    dfaMinInput: blankAutomaton(),
+    dfaMinInputBuildRegex: '',
+    minResult: null,
+    dfaToRegexInput: blankAutomaton(),
+    dfaToRegexInputBuildRegex: '',
+    dfaToRegexResult: null,
+  });
 
-  // NFA -> DFA — each tab now owns its own input automaton + canvas
-  // directly, instead of depending on whatever's currently loaded in the
-  // Simulate tab's shared tracer.
-  const [nfaInput, setNfaInput] = useState<AutomatonDefinition>(blankAutomaton());
-  const [nfaInputBuildRegex, setNfaInputBuildRegex] = useState('');
-  const [subsetResult, setSubsetResult] = useState<ReturnType<typeof convertNFAToDFA> | null>(null);
+  const [cases, setCases] = useState<ConversionCase[]>([emptyCase('Input 1')]);
+  const [activeCaseIdx, setActiveCaseIdx] = useState(0);
+  const activeCase = cases[activeCaseIdx] ?? cases[0];
 
-  // DFA Minimization
-  const [dfaMinInput, setDfaMinInput] = useState<AutomatonDefinition>(blankAutomaton());
-  const [dfaMinInputBuildRegex, setDfaMinInputBuildRegex] = useState('');
-  const [minResult, setMinResult] = useState<ReturnType<typeof minimizeDFA> | null>(null);
+  // Immutably patches ONLY the active case. Every other case is passed
+  // through by reference, so running or editing one input can never mutate
+  // another.
+  const patchCase = (patch: Partial<ConversionCase>) => {
+    setCases((prev) => prev.map((c, i) => (i === activeCaseIdx ? { ...c, ...patch } : c)));
+  };
 
-  // DFA -> Regex
-  const [dfaToRegexInput, setDfaToRegexInput] = useState<AutomatonDefinition>(blankAutomaton());
-  const [dfaToRegexInputBuildRegex, setDfaToRegexInputBuildRegex] = useState('');
-  const [dfaToRegexResult, setDfaToRegexResult] = useState<ReturnType<typeof convertDFAToRegex> | null>(null);
+  const addCase = () => {
+    if (cases.length >= MAX_CASES) return;
+    setCases((prev) => [...prev, emptyCase(`Input ${prev.length + 1}`)]);
+    setActiveCaseIdx(cases.length);
+  };
+
+  const removeCase = (idx: number) => {
+    if (cases.length <= 1) return;
+    setCases((prev) => prev.filter((_, i) => i !== idx));
+    setActiveCaseIdx((cur) => (cur >= idx && cur > 0 ? cur - 1 : cur));
+  };
+
+  const resetCase = () => patchCase(emptyCase(activeCase.name));
+
+  // Same names as before, so every tab below reads/writes the ACTIVE case
+  // without any other change to the existing UI code.
+  const regexInput = activeCase.regexInput;
+  const setRegexInput = (v: string) => patchCase({ regexInput: v });
+  const thompsonResult = activeCase.thompsonResult;
+  const setThompsonResult = (v: ConversionCase['thompsonResult']) => patchCase({ thompsonResult: v });
+
+  const nfaInput = activeCase.nfaInput;
+  const setNfaInput = (v: AutomatonDefinition) => patchCase({ nfaInput: v });
+  const nfaInputBuildRegex = activeCase.nfaInputBuildRegex;
+  const setNfaInputBuildRegex = (v: string) => patchCase({ nfaInputBuildRegex: v });
+  const subsetResult = activeCase.subsetResult;
+  const setSubsetResult = (v: ConversionCase['subsetResult']) => patchCase({ subsetResult: v });
+
+  const dfaMinInput = activeCase.dfaMinInput;
+  const setDfaMinInput = (v: AutomatonDefinition) => patchCase({ dfaMinInput: v });
+  const dfaMinInputBuildRegex = activeCase.dfaMinInputBuildRegex;
+  const setDfaMinInputBuildRegex = (v: string) => patchCase({ dfaMinInputBuildRegex: v });
+  const minResult = activeCase.minResult;
+  const setMinResult = (v: ConversionCase['minResult']) => patchCase({ minResult: v });
+
+  const dfaToRegexInput = activeCase.dfaToRegexInput;
+  const setDfaToRegexInput = (v: AutomatonDefinition) => patchCase({ dfaToRegexInput: v });
+  const dfaToRegexInputBuildRegex = activeCase.dfaToRegexInputBuildRegex;
+  const setDfaToRegexInputBuildRegex = (v: string) => patchCase({ dfaToRegexInputBuildRegex: v });
+  const dfaToRegexResult = activeCase.dfaToRegexResult;
+  const setDfaToRegexResult = (v: ConversionCase['dfaToRegexResult']) =>
+    patchCase({ dfaToRegexResult: v });
 
   // CYK Parser
   const [cykGrammar, setCykGrammar] = useState<ContextFreeGrammar>({
@@ -406,6 +487,64 @@ export const ConversionStudio: React.FC = () => {
               <option value="pda_an_bn">PDA: aⁿ bⁿ (Stack)</option>
             </select>
           </div>
+        </div>
+
+        {/* Independent Input Cases (1-5) */}
+        <div className="flex flex-wrap items-center gap-2 pt-4">
+          <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Inputs:</span>
+          {cases.map((c, idx) => {
+            const isSel = idx === activeCaseIdx;
+            return (
+              <div
+                key={c.id}
+                className={`flex items-center rounded-lg border transition ${
+                  isSel
+                    ? 'bg-indigo-50 border-indigo-500 text-indigo-700'
+                    : 'bg-white border-gray-200 text-slate-600 hover:border-gray-300'
+                }`}
+              >
+                <button
+                  onClick={() => setActiveCaseIdx(idx)}
+                  className="px-3 py-1.5 text-xs font-semibold"
+                  title={`Switch to ${c.name}`}
+                >
+                  {c.name}
+                </button>
+                {cases.length > 1 && (
+                  <button
+                    onClick={() => removeCase(idx)}
+                    className="pr-2 pl-0.5 py-1.5 text-slate-400 hover:text-rose-600 transition"
+                    title={`Remove ${c.name}`}
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+
+          <button
+            onClick={addCase}
+            disabled={cases.length >= MAX_CASES}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-dashed border-indigo-300 text-indigo-600 hover:bg-indigo-50 disabled:opacity-40 disabled:cursor-not-allowed transition"
+            title={cases.length >= MAX_CASES ? `Maximum of ${MAX_CASES} inputs reached` : 'Add another independent input'}
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Add Input
+          </button>
+
+          <button
+            onClick={resetCase}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-gray-200 text-slate-500 hover:text-slate-900 hover:border-gray-300 transition"
+            title="Clear this input's automata and results"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            Reset
+          </button>
+
+          <span className="text-[11px] text-slate-400">
+            {cases.length}/{MAX_CASES} — each input is fully independent
+          </span>
         </div>
 
         {/* Studio Navigation Tabs */}

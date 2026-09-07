@@ -12,6 +12,7 @@ import {
   TransitionEdge,
   ThompsonConstructionStep,
 } from '../types/automata';
+import * as core from './automataCore';
 
 // Helper to normalize epsilons
 export const EPSILON = 'ε';
@@ -484,292 +485,25 @@ function simulateTMStepByStep(
   return steps;
 }
 
+
 // -------------------------------------------------------------
-// THOMPSON'S CONSTRUCTION (REGEX -> NFA)
+// ALGORITHM ADAPTERS
 // -------------------------------------------------------------
-export function convertRegexToNFA(regexStr: string): {
-  nfa: AutomatonDefinition;
-  steps: ThompsonConstructionStep[];
-} {
-  const cleanRegex = regexStr.replace(/\s+/g, '');
-  if (!cleanRegex || cleanRegex === 'ε' || cleanRegex === 'eps') {
-    const s0 = { id: 'q0', name: 'q0', x: 120, y: 180, isStart: true };
-    const s1 = { id: 'q1', name: 'q1', x: 280, y: 180, isAccept: true };
-    return {
-      nfa: {
-        type: 'ENFA',
-        alphabet: [],
-        states: [s0, s1],
-        transitions: [{ id: 't0', from: 'q0', to: 'q1', symbols: ['ε'] }],
-        startStateId: 'q0',
-        acceptStateIds: ['q1'],
-      },
-      steps: [
-        {
-          step: 1,
-          token: 'ε',
-          operation: 'symbol',
-          resultLabel: 'ε',
-          stateCount: 2,
-          transitionCount: 1,
-          explanation: `The regex is empty (or ε), so Thompson's construction gives the simplest possible fragment: a start state with a single ε-transition straight to an accepting state.`,
-        },
-      ],
-    };
-  }
-
-  // Parse regex into postfix notation
-  const postfix = infixToPostfix(cleanRegex);
-  const { automaton, steps } = buildNFAFromPostfix(postfix);
-
-  // Layout states left-to-right by actual distance from start, not by
-  // internal creation order.
-  layoutNFAStates(automaton.states, automaton.transitions, automaton.startStateId);
-  return { nfa: automaton, steps };
-}
-
-function insertExplicitConcat(regex: string): string {
-  let output = '';
-  for (let i = 0; i < regex.length; i++) {
-    const c1 = regex[i];
-    output += c1;
-    if (i + 1 < regex.length) {
-      const c2 = regex[i + 1];
-      const isC1Operand = c1 !== '(' && c1 !== '|' && c1 !== '+';
-      const isC2Operand = c2 !== ')' && c2 !== '|' && c2 !== '+' && c2 !== '*' && c2 !== '?';
-      if (isC1Operand && isC2Operand) {
-        output += '.';
-      }
-    }
-  }
-  return output;
-}
-
-function infixToPostfix(regex: string): string {
-  const formatted = insertExplicitConcat(regex);
-  const prec: Record<string, number> = { '*': 3, '+': 3, '?': 3, '.': 2, '|': 1 };
-  let postfix = '';
-  const stack: string[] = [];
-
-  for (let i = 0; i < formatted.length; i++) {
-    const c = formatted[i];
-    if (c === '(') {
-      stack.push(c);
-    } else if (c === ')') {
-      while (stack.length > 0 && stack[stack.length - 1] !== '(') {
-        postfix += stack.pop();
-      }
-      stack.pop(); // pop '('
-    } else if (c in prec) {
-      while (
-        stack.length > 0 &&
-        stack[stack.length - 1] !== '(' &&
-        prec[stack[stack.length - 1]] >= prec[c]
-      ) {
-        postfix += stack.pop();
-      }
-      stack.push(c);
-    } else {
-      postfix += c;
-    }
-  }
-
-  while (stack.length > 0) {
-    postfix += stack.pop();
-  }
-  return postfix;
-}
-
-interface MiniNFA {
-  start: StateNode;
-  accept: StateNode;
-  states: StateNode[];
-  transitions: TransitionEdge[];
-  label: string; // the regex sub-expression this fragment represents, e.g. "a", "(a|b)", "(a|b)*"
-  isAtomic: boolean; // true if `label` is already a single self-contained unit (no extra parens needed if starred)
-}
-
-let nfaStateCounter = 0;
-function createNFAState(namePrefix = 'q'): StateNode {
-  const id = `q${nfaStateCounter++}`;
-  return { id, name: id, x: 100, y: 150 };
-}
-
-function buildNFAFromPostfix(postfix: string): {
-  automaton: AutomatonDefinition;
-  steps: ThompsonConstructionStep[];
-} {
-  nfaStateCounter = 0;
-  const stack: MiniNFA[] = [];
-  const alphabetSet = new Set<string>();
-  const steps: ThompsonConstructionStep[] = [];
-
-  for (const c of postfix) {
-    if (c === '.') {
-      // Concatenation
-      if (stack.length < 2) continue;
-      const n2 = stack.pop()!;
-      const n1 = stack.pop()!;
-      const epsTrans: TransitionEdge = {
-        id: generateId('t'),
-        from: n1.accept.id,
-        to: n2.start.id,
-        symbols: ['ε'],
-      };
-      const combined: MiniNFA = {
-        start: n1.start,
-        accept: n2.accept,
-        states: [...n1.states, ...n2.states],
-        transitions: [...n1.transitions, ...n2.transitions, epsTrans],
-        label: `${n1.label}${n2.label}`,
-        isAtomic: false,
-      };
-      stack.push(combined);
-
-      steps.push({
-        step: steps.length + 1,
-        token: c,
-        operation: 'concat',
-        resultLabel: combined.label,
-        stateCount: combined.states.length,
-        transitionCount: combined.transitions.length,
-        explanation: `Concatenated fragment '${n1.label}' and fragment '${n2.label}' into '${combined.label}' by adding one ε-transition from '${n1.label}''s accepting state to '${n2.label}''s start state. The combined fragment starts where '${n1.label}' started and accepts where '${n2.label}' accepts.`,
-      });
-    } else if (c === '|' || c === '+') {
-      // Union
-      if (stack.length < 2) continue;
-      const n2 = stack.pop()!;
-      const n1 = stack.pop()!;
-      const start = createNFAState();
-      const accept = createNFAState();
-
-      const t1: TransitionEdge = { id: generateId('t'), from: start.id, to: n1.start.id, symbols: ['ε'] };
-      const t2: TransitionEdge = { id: generateId('t'), from: start.id, to: n2.start.id, symbols: ['ε'] };
-      const t3: TransitionEdge = { id: generateId('t'), from: n1.accept.id, to: accept.id, symbols: ['ε'] };
-      const t4: TransitionEdge = { id: generateId('t'), from: n2.accept.id, to: accept.id, symbols: ['ε'] };
-
-      const combined: MiniNFA = {
-        start,
-        accept,
-        states: [start, ...n1.states, ...n2.states, accept],
-        transitions: [...n1.transitions, ...n2.transitions, t1, t2, t3, t4],
-        label: `(${n1.label}|${n2.label})`,
-        isAtomic: true,
-      };
-      stack.push(combined);
-
-      steps.push({
-        step: steps.length + 1,
-        token: c,
-        operation: 'union',
-        resultLabel: combined.label,
-        stateCount: combined.states.length,
-        transitionCount: combined.transitions.length,
-        explanation: `Combined fragment '${n1.label}' and fragment '${n2.label}' into '${combined.label}' using Thompson's union rule: a new start state gets ε-transitions into both fragments' start states, and a new accepting state is reached by ε-transitions from both fragments' accepting states.`,
-      });
-    } else if (c === '*') {
-      // Kleene Star
-      if (stack.length < 1) continue;
-      const n1 = stack.pop()!;
-      const start = createNFAState();
-      const accept = createNFAState();
-
-      const t1: TransitionEdge = { id: generateId('t'), from: start.id, to: n1.start.id, symbols: ['ε'] };
-      const t2: TransitionEdge = { id: generateId('t'), from: start.id, to: accept.id, symbols: ['ε'] };
-      const t3: TransitionEdge = { id: generateId('t'), from: n1.accept.id, to: n1.start.id, symbols: ['ε'] };
-      const t4: TransitionEdge = { id: generateId('t'), from: n1.accept.id, to: accept.id, symbols: ['ε'] };
-
-      const combined: MiniNFA = {
-        start,
-        accept,
-        states: [start, ...n1.states, accept],
-        transitions: [...n1.transitions, t1, t2, t3, t4],
-        label: `${n1.isAtomic ? n1.label : `(${n1.label})`}*`,
-        isAtomic: true,
-      };
-      stack.push(combined);
-
-      steps.push({
-        step: steps.length + 1,
-        token: c,
-        operation: 'star',
-        resultLabel: combined.label,
-        stateCount: combined.states.length,
-        transitionCount: combined.transitions.length,
-        explanation: `Applied the Kleene star to fragment '${n1.label}', producing '${combined.label}'. Added a new start state and a new accepting state, wired with four ε-transitions: start→accept directly (zero repetitions), start→'${n1.label}''s start (enter one repetition), '${n1.label}''s accept→'${n1.label}''s start (repeat again), and '${n1.label}''s accept→accept (stop repeating).`,
-      });
-    } else {
-      // Basic symbol
-      const sym = isEpsilon(c) ? 'ε' : c;
-      if (sym !== 'ε') alphabetSet.add(sym);
-
-      const start = createNFAState();
-      const accept = createNFAState();
-      const t: TransitionEdge = {
-        id: generateId('t'),
-        from: start.id,
-        to: accept.id,
-        symbols: [sym],
-      };
-      const combined: MiniNFA = {
-        start,
-        accept,
-        states: [start, accept],
-        transitions: [t],
-        label: sym,
-        isAtomic: true,
-      };
-      stack.push(combined);
-
-      steps.push({
-        step: steps.length + 1,
-        token: c,
-        operation: 'symbol',
-        resultLabel: sym,
-        stateCount: 2,
-        transitionCount: 1,
-        explanation: `Built a basic fragment for symbol '${sym}': a new start state with a single transition on '${sym}' to a new accepting state.`,
-      });
-    }
-  }
-
-  const finalMini = stack.pop() || {
-    start: createNFAState(),
-    accept: createNFAState(),
-    states: [],
-    transitions: [],
-    label: '',
-    isAtomic: true,
-  };
-
-  // Mark start & accept
-  finalMini.start.isStart = true;
-  finalMini.accept.isAccept = true;
-
-  const automaton: AutomatonDefinition = {
-    type: 'ENFA',
-    alphabet: Array.from(alphabetSet).sort(),
-    states: finalMini.states,
-    transitions: finalMini.transitions,
-    startStateId: finalMini.start.id,
-    acceptStateIds: [finalMini.accept.id],
-  };
-
-  return { automaton, steps };
-}
+// The four core algorithms now live in ./automataCore, implemented directly
+// from their formal definitions with no module-level mutable state. The
+// functions below are thin adapters: they call the core, apply visual layout,
+// and reshape the results into the step/report structures the existing UI
+// already renders. No algorithmic decisions are made here.
 
 function layoutNFAStates(states: StateNode[], transitions: TransitionEdge[], startStateId: string) {
   const spacingX = 160;
   const spacingY = 110;
 
   // BFS from the start state assigns each state a "level" — its shortest
-  // distance from start, following transitions in their natural direction.
-  // Placing states by level (left-to-right) instead of by internal
-  // creation order is what actually makes these diagrams readable: the
-  // graph is exactly as correct either way, but a creation-order grid
-  // makes edges crisscross confusingly even for a perfectly correct
-  // automaton, since Thompson's construction and subset construction both
-  // create states in an order that has nothing to do with visual flow.
+  // distance from start. Placing states by level (left-to-right) instead of by
+  // internal creation order is what makes these diagrams readable: the graph is
+  // equally correct either way, but creation order has nothing to do with
+  // visual flow, so a naive grid makes edges crisscross confusingly.
   const levelOf = new Map<string, number>();
   const queue: string[] = [startStateId];
   levelOf.set(startStateId, 0);
@@ -785,8 +519,6 @@ function layoutNFAStates(states: StateNode[], transitions: TransitionEdge[], sta
     }
   }
 
-  // Anything unreachable from start (shouldn't normally happen) still
-  // gets placed, just after the furthest reachable level.
   let maxLevel = 0;
   for (const lvl of levelOf.values()) maxLevel = Math.max(maxLevel, lvl);
   states.forEach((st) => {
@@ -796,8 +528,6 @@ function layoutNFAStates(states: StateNode[], transitions: TransitionEdge[], sta
     }
   });
 
-  // Group states by level, then stack each level's states vertically,
-  // centered on a common midline.
   const byLevel = new Map<number, StateNode[]>();
   states.forEach((st) => {
     const lvl = levelOf.get(st.id)!;
@@ -818,562 +548,190 @@ function layoutNFAStates(states: StateNode[], transitions: TransitionEdge[], sta
   });
 }
 
-// Builds a plain-English explanation for one subset-construction step
-function explainSubsetStep(
-  dfaName: string,
-  nfaStateNames: string[],
-  acceptingMemberNames: string[],
-  isAccept: boolean,
-  isStart: boolean,
-  transitionRecord: Record<string, { targetDfaState: string; targetNfaSet: string[] }>,
-  alphabet: string[]
-): string {
-  const subsetLabel = `{${nfaStateNames.join(', ') || '∅'}}`;
+// -------------------------------------------------------------
+// REGEX -> ε-NFA (Thompson)
+// -------------------------------------------------------------
+export function convertRegexToNFA(regexStr: string): {
+  nfa: AutomatonDefinition;
+  steps: ThompsonConstructionStep[];
+} {
+  const nfa = core.regexToNfa(regexStr);
+  layoutNFAStates(nfa.states, nfa.transitions, nfa.startStateId);
 
-  let text = isStart
-    ? `DFA state ${dfaName} is the start state. It is formed by taking the ε-closure of the NFA's start state, giving the subset ${subsetLabel}. `
-    : `DFA state ${dfaName} represents the subset ${subsetLabel}, reached while processing an earlier transition. `;
+  // Walk the parsed AST in the same post-order the construction uses, so the
+  // displayed steps mirror how the fragments were actually composed.
+  const trimmed = regexStr.replace(/\s+/g, '');
+  const ast: core.RegexAst = trimmed === '' ? { kind: 'epsilon' } : core.parseRegex(trimmed);
 
-  if (isAccept) {
-    const who = acceptingMemberNames.join(', ');
-    const verb = acceptingMemberNames.length > 1 ? 'are' : 'is';
-    text += `Since ${who} ${verb} an accepting state in the original NFA, DFA state ${dfaName} is also accepting. `;
-  } else {
-    text += `None of the NFA states in this subset are accepting, so DFA state ${dfaName} is not an accepting state. `;
-  }
+  const steps: ThompsonConstructionStep[] = [];
+  const walk = (n: core.RegexAst): { label: string; states: number; transitions: number } => {
+    const push = (
+      token: string,
+      operation: ThompsonConstructionStep['operation'],
+      label: string,
+      states: number,
+      transitions: number,
+      explanation: string
+    ) => {
+      steps.push({
+        step: steps.length + 1,
+        token,
+        operation,
+        resultLabel: label,
+        stateCount: states,
+        transitionCount: transitions,
+        explanation,
+      });
+      return { label, states, transitions };
+    };
 
-  const moves = alphabet.map((sym) => {
-    const t = transitionRecord[sym];
-
-    if (!t || t.targetDfaState === '∅ (Dead State)') {
-      return `on '${sym}' there is no reachable NFA state, so it goes to the dead state`;
+    switch (n.kind) {
+      case 'empty':
+        return push('∅', 'symbol', '∅', 2, 0, 'Built a fragment for the empty language ∅: a start and accept state with no path between them, so nothing is accepted.');
+      case 'epsilon':
+        return push('ε', 'symbol', 'ε', 2, 1, 'Built a fragment for ε: a start state with a single ε-transition straight to an accepting state.');
+      case 'symbol':
+        return push(n.value, 'symbol', n.value, 2, 1, `Built a basic fragment for symbol '${n.value}': a new start state with a single transition on '${n.value}' to a new accepting state.`);
+      case 'concat': {
+        const l = walk(n.left);
+        const r = walk(n.right);
+        const label = `${l.label}${r.label}`;
+        return push('.', 'concat', label, l.states + r.states, l.transitions + r.transitions + 1,
+          `Concatenated '${l.label}' and '${r.label}' into '${label}' by adding one ε-transition from '${l.label}''s accepting state to '${r.label}''s start state. The combined fragment starts where '${l.label}' started and accepts where '${r.label}' accepts.`);
+      }
+      case 'union': {
+        const l = walk(n.left);
+        const r = walk(n.right);
+        const label = `(${l.label}|${r.label})`;
+        return push('|', 'union', label, l.states + r.states + 2, l.transitions + r.transitions + 4,
+          `Combined '${l.label}' and '${r.label}' into '${label}' using Thompson's union rule: a new start state gets ε-transitions into both fragments' start states, and a new accepting state is reached by ε-transitions from both fragments' accepting states.`);
+      }
+      case 'star': {
+        const inner = walk(n.inner);
+        const label = `${inner.label}*`;
+        return push('*', 'star', label, inner.states + 2, inner.transitions + 4,
+          `Applied the Kleene star to '${inner.label}', producing '${label}'. Added a new start and accept state wired with four ε-transitions: start→accept (zero repetitions), start→'${inner.label}''s start (enter a repetition), '${inner.label}''s accept→its start (repeat again), and '${inner.label}''s accept→accept (stop repeating).`);
+      }
+      case 'optional': {
+        const inner = walk(n.inner);
+        const label = `${inner.label}?`;
+        return push('?', 'star', label, inner.states + 2, inner.transitions + 3,
+          `Made '${inner.label}' optional, producing '${label}'. Like the Kleene star but WITHOUT the repeat edge: start→accept skips it entirely, start→'${inner.label}''s start enters it once, and '${inner.label}''s accept→accept leaves.`);
+      }
     }
+  };
+  walk(ast);
 
-    return `on '${sym}' it moves to ${t.targetDfaState} (subset {${t.targetNfaSet.join(', ') || '∅'}})`;
-  });
-
-  text += `From ${dfaName}: ${moves.join('; ')}.`;
-
-  return text;
+  return { nfa, steps };
 }
 
 // -------------------------------------------------------------
 // SUBSET / POWERSET CONSTRUCTION (NFA -> DFA)
 // -------------------------------------------------------------
-export function convertNFAToDFA(
-  nfa: AutomatonDefinition
-): {
+export function convertNFAToDFA(nfa: AutomatonDefinition): {
   dfa: AutomatonDefinition;
   steps: SubsetConstructionStep[];
 } {
-  const alphabet = nfa.alphabet.filter((s) => !isEpsilon(s));
-  const initialClosure = getEpsilonClosure([nfa.startStateId], nfa.transitions).sort();
+  const { dfa, steps: coreSteps } = core.nfaToDfa(nfa);
+  layoutNFAStates(dfa.states, dfa.transitions, dfa.startStateId);
 
-  const subsetMap = new Map<string, string>(); // sorted stringified set -> DFA state ID
-  const dfaStates: StateNode[] = [];
-  const dfaTransitions: TransitionEdge[] = [];
-  const steps: SubsetConstructionStep[] = [];
+  const alphabet = dfa.alphabet;
+  const steps: SubsetConstructionStep[] = coreSteps.map((st, i) => {
+    const names = st.nfaStateIds.map((id) => getStateName(nfa, id));
+    const subsetLabel = `{${names.join(', ') || '∅'}}`;
+    const acceptingMembers = st.nfaStateIds
+      .filter((id) => nfa.acceptStateIds.includes(id))
+      .map((id) => getStateName(nfa, id));
 
-  let stateIdx = 0;
-  const getDfaStateName = (set: string[]) => {
-    const key = set.join(',');
-    if (!subsetMap.has(key)) {
-      const name = String.fromCharCode(65 + stateIdx++); // A, B, C...
-      subsetMap.set(key, name);
+    let text = st.isStart
+      ? `DFA state ${st.dfaStateName} is the start state. It is formed by taking the ε-closure of the NFA's start state, giving the subset ${subsetLabel}. `
+      : `DFA state ${st.dfaStateName} represents the subset ${subsetLabel}, reached while processing an earlier transition. `;
+
+    if (st.isAccept) {
+      const verb = acceptingMembers.length > 1 ? 'are' : 'is';
+      text += `Since ${acceptingMembers.join(', ')} ${verb} an accepting state in the original NFA, DFA state ${st.dfaStateName} is also accepting. `;
+    } else {
+      text += `None of the NFA states in this subset are accepting, so DFA state ${st.dfaStateName} is not an accepting state. `;
     }
-    return subsetMap.get(key)!;
-  };
 
-  const queue: string[][] = [initialClosure];
-  const visited = new Set<string>();
-  const startDfaName = getDfaStateName(initialClosure);
-
-  while (queue.length > 0) {
-    const currentSet = queue.shift()!;
-    const key = currentSet.join(',');
-    if (visited.has(key)) continue;
-    visited.add(key);
-
-    const dfaName = getDfaStateName(currentSet);
-    const isAccept = currentSet.some((stId) => nfa.acceptStateIds.includes(stId));
-    const isStart = dfaName === startDfaName;
-
-    dfaStates.push({
-      id: dfaName,
-      name: dfaName,
-      x: 100 + (dfaStates.length % 4) * 160,
-      y: 100 + Math.floor(dfaStates.length / 4) * 140,
-      isStart,
-      isAccept,
+    const transitions: SubsetConstructionStep['transitions'] = {};
+    const moves = alphabet.map((sym) => {
+      const m = st.moves[sym];
+      if (!m || m.targetDfaState === null) {
+        transitions[sym] = { targetDfaState: '∅ (Dead State)', targetNfaSet: [] };
+        return `on '${sym}' there is no reachable NFA state, so it goes to the dead state`;
+      }
+      const targetNames = m.targetNfaIds.map((id) => getStateName(nfa, id));
+      transitions[sym] = { targetDfaState: m.targetDfaState, targetNfaSet: targetNames };
+      return `on '${sym}' it moves to ${m.targetDfaState} (subset {${targetNames.join(', ')}})`;
     });
+    text += `From ${st.dfaStateName}: ${moves.join('; ')}.`;
 
-    const stepTransitionRecord: Record<string, { targetDfaState: string; targetNfaSet: string[] }> = {};
-
-    for (const sym of alphabet) {
-      // Find targets on sym
-      const reachSet = new Set<string>();
-      for (const stId of currentSet) {
-        for (const t of nfa.transitions) {
-          if (t.from === stId && t.symbols.includes(sym)) {
-            reachSet.add(t.to);
-          }
-        }
-      }
-
-      const targetClosure = getEpsilonClosure(Array.from(reachSet), nfa.transitions).sort();
-      if (targetClosure.length > 0) {
-        const targetDfaName = getDfaStateName(targetClosure);
-        const targetKey = targetClosure.join(',');
-
-        stepTransitionRecord[sym] = {
-          targetDfaState: targetDfaName,
-          targetNfaSet: targetClosure.map((id) => getStateName(nfa, id)),
-        };
-
-        // Add or merge transition
-        const existing = dfaTransitions.find((t) => t.from === dfaName && t.to === targetDfaName);
-        if (existing) {
-          if (!existing.symbols.includes(sym)) existing.symbols.push(sym);
-        } else {
-          dfaTransitions.push({
-            id: generateId('dfa_t'),
-            from: dfaName,
-            to: targetDfaName,
-            symbols: [sym],
-          });
-        }
-
-        if (!visited.has(targetKey)) {
-          queue.push(targetClosure);
-        }
-      } else {
-        stepTransitionRecord[sym] = {
-          targetDfaState: '∅ (Dead State)',
-          targetNfaSet: [],
-        };
-      }
-    }
-
-    const acceptingMemberNames = currentSet
-  .filter((stId) => nfa.acceptStateIds.includes(stId))
-  .map((stId) => getStateName(nfa, stId));
-
-const explanation = explainSubsetStep(
-  dfaName,
-  currentSet.map((id) => getStateName(nfa, id)),
-  acceptingMemberNames,
-  isAccept,
-  isStart,
-  stepTransitionRecord,
-  alphabet
-);
-
-steps.push({
-  step: steps.length + 1,
-  dfaStateName: dfaName,
-  nfaStateSet: currentSet.map((id) => getStateName(nfa, id)),
-  transitions: stepTransitionRecord,
-  isAccept,
-  isNew: true,
-  explanation,
-});
-  }
-  // Re-layout all discovered DFA states left-to-right by distance from the
-  // start state, instead of the fixed 4-column grid assigned above during
-  // the BFS — a plain grid gets absurdly tall (and hard to fit on screen)
-  // once there are 50+ states, and doesn't reflect the actual graph flow.
-  layoutNFAStates(dfaStates, dfaTransitions, startDfaName);
-
-  const dfa: AutomatonDefinition = {
-    type: 'DFA',
-    alphabet,
-    states: dfaStates,
-    transitions: dfaTransitions,
-    startStateId: startDfaName,
-    acceptStateIds: dfaStates.filter((s) => s.isAccept).map((s) => s.id),
-  };
+    return {
+      step: i + 1,
+      dfaStateName: st.dfaStateName,
+      nfaStateSet: names,
+      transitions,
+      isAccept: st.isAccept,
+      isNew: true,
+      explanation: text,
+    };
+  });
 
   return { dfa, steps };
 }
 
-// Checks whether an automaton is a valid, deterministic DFA — at most one
-// transition per symbol per state, and no ε-transitions (those are only
-// meaningful for NFA/ENFA). Returns full details of the first violation
-// found, not just a boolean, since "there's a problem" alone isn't
-// actionable for whoever is looking at the automaton.
+// -------------------------------------------------------------
+// DETERMINISM VALIDATION
+// -------------------------------------------------------------
 export function findDeterminismViolation(
   a: AutomatonDefinition
 ): { stateId: string; symbol: string; targets: string[] } | null {
-  for (const t of a.transitions) {
-    if (t.symbols.some((s) => isEpsilon(s))) {
-      return { stateId: t.from, symbol: 'ε', targets: [t.to] };
-    }
-  }
-  const targetsPerStateSymbol = new Map<string, Set<string>>(); // "stateId|symbol" -> targets
-  for (const t of a.transitions) {
-    for (const sym of t.symbols) {
-      const key = `${t.from}|${sym}`;
-      if (!targetsPerStateSymbol.has(key)) targetsPerStateSymbol.set(key, new Set());
-      targetsPerStateSymbol.get(key)!.add(t.to);
-    }
-  }
-  for (const [key, targets] of targetsPerStateSymbol) {
-    if (targets.size > 1) {
-      const [stateId, symbol] = key.split('|');
-      return { stateId, symbol, targets: Array.from(targets) };
-    }
-  }
-  return null;
+  return core.findDeterminismViolation(a);
 }
 
 export function isAutomatonDeterministic(a: AutomatonDefinition): boolean {
-  return findDeterminismViolation(a) === null;
+  return core.isDeterministic(a);
 }
 
 // -------------------------------------------------------------
-// DFA MINIMIZATION (TABLE-FILLING / HOPCROFT)
+// DFA MINIMIZATION (partition refinement)
 // -------------------------------------------------------------
 export function minimizeDFA(dfa: AutomatonDefinition): {
   minimizedDfa: AutomatonDefinition;
   steps: MinimizationStep[];
   distinguishableMatrix: Record<string, Record<string, boolean>>;
 } {
-  const states = dfa.states;
-  const stateIds = states.map((s) => s.id);
-  const alphabet = dfa.alphabet;
+  const { minimizedDfa, rounds, equivalenceClasses, violation } = core.minimizeDfa(dfa);
+  layoutNFAStates(minimizedDfa.states, minimizedDfa.transitions, minimizedDfa.startStateId);
 
-  // The table-filling algorithm's precondition is that the input is
-  // already a valid, deterministic DFA — it has no meaningful answer for
-  // non-deterministic input. Without this check, a state with two
-  // conflicting transitions on the same symbol would silently have one of
-  // them ignored (whichever happened to come first in the transitions
-  // array) with no indication anything was wrong. This check doesn't
-  // change behavior for any valid DFA — it only adds a visible warning
-  // when the precondition is actually violated.
-  const violation = findDeterminismViolation(dfa);
-  const validationWarning = violation
+  const warning = violation
     ? `⚠ INPUT IS NOT A VALID DFA: state "${getStateName(dfa, violation.stateId)}" has ${
         violation.symbol === 'ε'
           ? 'an ε-transition (only valid for NFA/ENFA, not a DFA)'
           : `multiple transitions on '${violation.symbol}' (to ${violation.targets
               .map((id) => getStateName(dfa, id))
               .join(' AND ')})`
-      }. Minimization requires a deterministic DFA — the result below arbitrarily used only one of the conflicting transitions and should not be trusted. `
+      }. Minimization requires a deterministic DFA, so the result below should not be trusted. `
     : '';
 
-  // Step 1: Remove unreachable states
-  const reachable = new Set<string>([dfa.startStateId]);
-  const q = [dfa.startStateId];
-  while (q.length > 0) {
-    const curr = q.shift()!;
-    for (const t of dfa.transitions) {
-      if (t.from === curr && !reachable.has(t.to)) {
-        reachable.add(t.to);
-        q.push(t.to);
-      }
-    }
-  }
-
-  const activeStates = states.filter((s) => reachable.has(s.id));
-  const activeIds = activeStates.map((s) => s.id);
-
-  // Some DFAs (e.g. straight out of subset construction) are "incomplete" —
-  // a state can simply have no transition for some alphabet symbol, which
-  // means "implicitly reject" during simulation. To minimize correctly we
-  // must treat that exactly like a transition to a shared, non-accepting,
-  // self-looping trap state. Without this, two states can look identical
-  // to the table-filling algorithm just because BOTH happen to lack the
-  // same transition, even when their surviving behavior is completely
-  // different — which silently over-merges states into a too-small,
-  // incorrect "minimal" DFA.
-  const TRAP_ID = '__trap__';
-  const workingIds = [...activeIds, TRAP_ID];
-  const destOf = (from: string, sym: string): string => {
-    if (from === TRAP_ID) return TRAP_ID;
-    const t = dfa.transitions.find((tr) => tr.from === from && tr.symbols.includes(sym));
-    return t ? t.to : TRAP_ID;
-  };
-
-  // Distinguishable table matrix (over real active states + the virtual trap)
-  const table: Record<string, Record<string, boolean>> = {};
-  for (const s1 of workingIds) {
-    table[s1] = {};
-    for (const s2 of workingIds) {
-      table[s1][s2] = false;
-    }
-  }
-
-  // Base case: Mark pairs (p, q) where one is accept and one is not
-  // (the trap state is always non-accepting)
-  const acceptSet = new Set(dfa.acceptStateIds);
-  const isAccepting = (id: string) => id !== TRAP_ID && acceptSet.has(id);
-  for (let i = 0; i < workingIds.length; i++) {
-    for (let j = i + 1; j < workingIds.length; j++) {
-      const p = workingIds[i];
-      const q_ = workingIds[j];
-      if (isAccepting(p) !== isAccepting(q_)) {
-        table[p][q_] = true;
-        table[q_][p] = true;
-      }
-    }
-  }
-
-  const steps: MinimizationStep[] = [];
-  steps.push({
-    round: 0,
-    partitions: [
-      activeStates.filter((s) => !acceptSet.has(s.id)).map((s) => s.name),
-      activeStates.filter((s) => acceptSet.has(s.id)).map((s) => s.name),
-    ],
-    distinguishableTable: JSON.parse(JSON.stringify(table)),
-    notes: `${validationWarning}Initial partition into Non-Accepting and Accepting states.`,
-  });
-
-  // Iterative marking
-  let changed = true;
-  let round = 1;
-
-  while (changed) {
-    changed = false;
-    for (let i = 0; i < workingIds.length; i++) {
-      for (let j = i + 1; j < workingIds.length; j++) {
-        const p = workingIds[i];
-        const q_ = workingIds[j];
-
-        if (!table[p][q_]) {
-          for (const sym of alphabet) {
-            const destP = destOf(p, sym);
-            const destQ = destOf(q_, sym);
-
-            if (destP !== destQ && table[destP][destQ]) {
-              table[p][q_] = true;
-              table[q_][p] = true;
-              changed = true;
-              break;
-            }
-          }
-        }
-      }
-    }
-
-    if (changed) {
-      steps.push({
-        round,
-        partitions: [],
-        distinguishableTable: JSON.parse(JSON.stringify(table)),
-        notes: `Round ${round}: Marked new distinguishable state pairs based on symbol transitions.`,
-      });
-      round++;
-    }
-  }
-
-  // Merge equivalent states
-  const visited = new Set<string>();
-  const equivalenceGroups: string[][] = [];
-
-  for (const s of activeIds) {
-    if (!visited.has(s)) {
-      const group = [s];
-      visited.add(s);
-      for (const other of activeIds) {
-        if (!visited.has(other) && !table[s][other]) {
-          group.push(other);
-          visited.add(other);
-        }
-      }
-      equivalenceGroups.push(group);
-    }
-  }
-
-  // Build minimized DFA
-  const minStates: StateNode[] = [];
-  const stateMapping = new Map<string, string>(); // oldId -> newMergedId
-
-  equivalenceGroups.forEach((group, idx) => {
-    const newName = group.map((id) => getStateName(dfa, id)).join('/');
-    const newId = `M${idx}`;
-    group.forEach((oldId) => stateMapping.set(oldId, newId));
-
-    const isStart = group.includes(dfa.startStateId);
-    const isAccept = group.some((id) => acceptSet.has(id));
-
-    minStates.push({
-      id: newId,
-      name: newName,
-      x: 0,
-      y: 0,
-      isStart,
-      isAccept,
-    });
-  });
-
-  const minTransitions: TransitionEdge[] = [];
-  for (const group of equivalenceGroups) {
-    const rep = group[0];
-    const fromNew = stateMapping.get(rep)!;
-
-    for (const sym of alphabet) {
-      const targetOld = dfa.transitions.find((t) => t.from === rep && t.symbols.includes(sym))?.to;
-      if (targetOld && stateMapping.has(targetOld)) {
-        const toNew = stateMapping.get(targetOld)!;
-        const exist = minTransitions.find((t) => t.from === fromNew && t.to === toNew);
-        if (exist) {
-          if (!exist.symbols.includes(sym)) exist.symbols.push(sym);
-        } else {
-          minTransitions.push({
-            id: generateId('min_t'),
-            from: fromNew,
-            to: toNew,
-            symbols: [sym],
-          });
-        }
-      }
-    }
-  }
-
-  const startStateId = stateMapping.get(dfa.startStateId) || minStates[0]?.id || '';
-  const acceptStateIds = minStates.filter((s) => s.isAccept).map((s) => s.id);
-
-  // Lay out left-to-right by real distance from start, same as every other
-  // automaton diagram in the app — previously this used its own separate
-  // grid based on equivalence-group processing order, which had nothing to
-  // do with actual graph flow.
-  layoutNFAStates(minStates, minTransitions, startStateId);
-
-  const minimizedDfa: AutomatonDefinition = {
-    type: 'DFA',
-    alphabet,
-    states: minStates,
-    transitions: minTransitions,
-    startStateId,
-    acceptStateIds,
-  };
+  const steps: MinimizationStep[] = rounds.map((r, i) => ({
+    round: r.round,
+    partitions: r.partitions,
+    distinguishableTable: {},
+    notes: i === 0 ? `${warning}${r.note}` : r.note,
+  }));
 
   steps.push({
-    round: round + 1,
-    partitions: equivalenceGroups.map((g) => g.map((id) => getStateName(dfa, id))),
-    distinguishableTable: table,
-    notes: `Equivalence classes: ${equivalenceGroups.map((g) => `{${g.map((id) => getStateName(dfa, id)).join(',')}}`).join(', ')}`,
+    round: rounds.length,
+    partitions: equivalenceClasses,
+    distinguishableTable: {},
+    notes: `Final equivalence classes: ${equivalenceClasses
+      .map((g) => `{${g.join(',')}}`)
+      .join(', ')}. Each class becomes one state of the minimal DFA.`,
   });
 
-  return { minimizedDfa, steps, distinguishableMatrix: table };
-}
-
-// -------------------------------------------------------------
-// REGEX AST — used by state elimination to keep every intermediate
-// expression in a proper algebraic form (rather than raw strings), so
-// standard regex identities can be applied exactly once, correctly,
-// instead of via ad-hoc string pattern matching. This is what lets the
-// final serialization emit only the parentheses actually required by
-// precedence, instead of wrapping almost everything defensively.
-// -------------------------------------------------------------
-type RegexNode =
-  | { kind: 'empty' } // ∅ — the empty language
-  | { kind: 'epsilon' } // ε — matches only the empty string
-  | { kind: 'symbol'; value: string }
-  | { kind: 'concat'; parts: RegexNode[] } // flattened, order-sensitive
-  | { kind: 'union'; parts: RegexNode[] } // flattened, order-insensitive
-  | { kind: 'star'; inner: RegexNode };
-
-const RE_EMPTY: RegexNode = { kind: 'empty' };
-const RE_EPSILON: RegexNode = { kind: 'epsilon' };
-
-// A canonical (fully parenthesized, order-normalized-for-union) string key
-// used only to detect duplicate branches — not for display.
-function regexCanonicalKey(node: RegexNode): string {
-  switch (node.kind) {
-    case 'empty':
-      return '∅';
-    case 'epsilon':
-      return 'ε';
-    case 'symbol':
-      return node.value;
-    case 'star':
-      return `(${regexCanonicalKey(node.inner)})*`;
-    case 'concat':
-      return node.parts.map(regexCanonicalKey).join('.');
-    case 'union':
-      return `{${node.parts.map(regexCanonicalKey).sort().join('|')}}`;
-  }
-}
-
-// Union identities: ∅ is the identity element, union is idempotent
-// (R|R = R), and union is commutative — so duplicate branches (which the
-// elimination algorithm naturally produces from symmetric paths) collapse
-// away instead of accumulating as visual clutter.
-function regexUnion(a: RegexNode, b: RegexNode): RegexNode {
-  if (a.kind === 'empty') return b;
-  if (b.kind === 'empty') return a;
-  const partsA = a.kind === 'union' ? a.parts : [a];
-  const partsB = b.kind === 'union' ? b.parts : [b];
-  const seen = new Map<string, RegexNode>();
-  for (const p of [...partsA, ...partsB]) {
-    const key = regexCanonicalKey(p);
-    if (!seen.has(key)) seen.set(key, p);
-  }
-  const uniqueParts = Array.from(seen.values());
-  return uniqueParts.length === 1 ? uniqueParts[0] : { kind: 'union', parts: uniqueParts };
-}
-
-// Concat identities: ε is the identity element, ∅ is absorbing
-// (concatenating with the empty language is still the empty language).
-function regexConcat(a: RegexNode, b: RegexNode): RegexNode {
-  if (a.kind === 'empty' || b.kind === 'empty') return RE_EMPTY;
-  if (a.kind === 'epsilon') return b;
-  if (b.kind === 'epsilon') return a;
-  const partsA = a.kind === 'concat' ? a.parts : [a];
-  const partsB = b.kind === 'concat' ? b.parts : [b];
-  return { kind: 'concat', parts: [...partsA, ...partsB] };
-}
-
-// Star identities: ∅* = ε (zero-or-more repetitions of nothing is just
-// the empty string), ε* = ε, and (R*)* = R* (double-star collapses).
-function regexStar(a: RegexNode): RegexNode {
-  if (a.kind === 'empty' || a.kind === 'epsilon') return RE_EPSILON;
-  if (a.kind === 'star') return a;
-  return { kind: 'star', inner: a };
-}
-
-function regexPrecedence(node: RegexNode): number {
-  switch (node.kind) {
-    case 'union':
-      return 1;
-    case 'concat':
-      return 2;
-    case 'star':
-      return 3;
-    default:
-      return 4; // symbol, epsilon, empty — always atomic
-  }
-}
-
-// Serializes to this app's own regex syntax (symbols, |, *, implicit
-// concatenation, and parentheses) — adding parentheses only where the
-// child's precedence is actually too low for its position, not
-// defensively around every sub-expression.
-function serializeRegexNode(node: RegexNode, minPrec: number = 0): string {
-  let s: string;
-  switch (node.kind) {
-    case 'empty':
-      s = '∅';
-      break;
-    case 'epsilon':
-      s = 'ε';
-      break;
-    case 'symbol':
-      s = node.value;
-      break;
-    case 'star':
-      s = `${serializeRegexNode(node.inner, 3)}*`;
-      break;
-    case 'concat':
-      s = node.parts.map((p) => serializeRegexNode(p, 2)).join('');
-      break;
-    case 'union':
-      s = node.parts.map((p) => serializeRegexNode(p, 1)).join('|');
-      break;
-  }
-  return regexPrecedence(node) < minPrec ? `(${s})` : s;
+  return { minimizedDfa, steps, distinguishableMatrix: {} };
 }
 
 // -------------------------------------------------------------
@@ -1383,95 +741,17 @@ export function convertDFAToRegex(dfa: AutomatonDefinition): {
   regex: string;
   steps: StateEliminationStep[];
 } {
-  const steps: StateEliminationStep[] = [];
-  const states = [...dfa.states];
-  const stateIds = states.map((s) => s.id);
-
-  // Initialize GNFA with special Start state and Accept state
-  const gnfaStart = 'Q_START';
-  const gnfaAccept = 'Q_ACCEPT';
-
-  const allNodes = [gnfaStart, ...stateIds, gnfaAccept];
-  const R: Record<string, Record<string, RegexNode>> = {};
-
-  for (const u of allNodes) {
-    R[u] = {};
-    for (const v of allNodes) {
-      R[u][v] = RE_EMPTY;
-    }
-  }
-
-  // Base transitions from DFA
-  for (const t of dfa.transitions) {
-    const symNode: RegexNode = t.symbols
-      .map((sym): RegexNode => ({ kind: 'symbol', value: sym }))
-      .reduce((acc, s) => regexUnion(acc, s));
-    R[t.from][t.to] = regexUnion(R[t.from][t.to], symNode);
-  }
-
-  // Start transition
-  R[gnfaStart][dfa.startStateId] = regexUnion(R[gnfaStart][dfa.startStateId], RE_EPSILON);
-
-  // Accept transitions
-  for (const accId of dfa.acceptStateIds) {
-    R[accId][gnfaAccept] = regexUnion(R[accId][gnfaAccept], RE_EPSILON);
-  }
-
-  // Snapshot R (as strings, for the existing step-by-step display) at a
-  // point in the algorithm.
-  const snapshotR = (): Record<string, Record<string, string>> => {
-    const snap: Record<string, Record<string, string>> = {};
-    for (const u of Object.keys(R)) {
-      snap[u] = {};
-      for (const v of Object.keys(R[u])) {
-        snap[u][v] = serializeRegexNode(R[u][v]);
-      }
-    }
-    return snap;
-  };
-
-  let remaining = [...stateIds];
-  let stepCounter = 1;
-
-  steps.push({
-    step: 0,
-    eliminatedState: 'Initial GNFA setup',
-    remainingStates: remaining,
-    transitionsRegex: snapshotR(),
-    explanation: `Added new start state ${gnfaStart} and accept state ${gnfaAccept}.`,
-  });
-
-  // Successively eliminate states
-  for (const k of stateIds) {
-    remaining = remaining.filter((s) => s !== k);
-    const activeCurrent = [gnfaStart, ...remaining, gnfaAccept];
-
-    for (const i of activeCurrent) {
-      for (const j of activeCurrent) {
-        const Rik = R[i][k];
-        const Rkk = R[k][k];
-        const Rkj = R[k][j];
-
-        if (Rik.kind !== 'empty' && Rkj.kind !== 'empty') {
-          const bypass = regexConcat(regexConcat(Rik, regexStar(Rkk)), Rkj);
-          R[i][j] = regexUnion(R[i][j], bypass);
-        }
-      }
-    }
-
-    steps.push({
-      step: stepCounter++,
-      eliminatedState: getStateName(dfa, k),
-      remainingStates: remaining,
-      transitionsRegex: snapshotR(),
-      explanation: `Eliminated state ${getStateName(dfa, k)} using rule R_ij = R_ij ∪ (R_ik)(R_kk)*(R_kj)`,
-    });
-  }
-
-  const regex = serializeRegexNode(R[gnfaStart][gnfaAccept]);
-
+  const { regex, steps: coreSteps } = core.dfaToRegex(dfa);
+  const steps: StateEliminationStep[] = coreSteps.map((s) => ({
+    step: s.step,
+    eliminatedState: s.eliminatedState,
+    remainingStates: s.remainingStates,
+    transitionsRegex: s.snapshot,
+    explanation: s.explanation,
+  }));
   return { regex, steps };
 }
+
 
 // -------------------------------------------------------------
 // CFG & CYK PARSING ALGORITHM
