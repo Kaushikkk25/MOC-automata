@@ -129,20 +129,28 @@ export const AutomataCanvas: React.FC<AutomataCanvasProps> = ({
   // between two 4-state DFAs, and that still needs to re-center) — and not
   // on every drag, since dragging changes x/y but not which states exist,
   // and we don't want to yank the view out from under someone mid-drag.
+  //
+  // The fit is deferred by two animation frames rather than run
+  // immediately: each conversion tab mounts a brand-new AutomataCanvas
+  // instance when you switch to it, and measuring the container's size
+  // the instant this effect fires can catch it before the browser has
+  // actually finished laying it out — producing an inconsistent, wrong
+  // measurement (and therefore a wrong center) on some loads but not
+  // others. Waiting two frames reliably lands after layout has settled.
   const stateIdentitySignature = automaton.states.map((s) => s.id).join(',');
-useEffect(() => {
-  let raf2 = 0;
-  const raf1 = requestAnimationFrame(() => {
-    raf2 = requestAnimationFrame(() => {
-      fitToScreen();
+  useEffect(() => {
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        fitToScreen();
+      });
     });
-  });
-  return () => {
-    cancelAnimationFrame(raf1);
-    if (raf2) cancelAnimationFrame(raf2);
-  };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [stateIdentitySignature]);
+    return () => {
+      cancelAnimationFrame(raf1);
+      if (raf2) cancelAnimationFrame(raf2);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stateIdentitySignature]);
 
   // Modal / Inputs for editing transition
   const [editingTransition, setEditingTransition] = useState<TransitionEdge | null>(null);
@@ -219,6 +227,29 @@ useEffect(() => {
             st.id === draggingStateId ? { ...st, x: Math.max(40, newX), y: Math.max(40, newY) } : st
           ),
         });
+
+        // Auto-pan while dragging a state near the edge — panning the
+        // whole diagram never clips because it's just moving everything
+        // together, but dragging ONE state can walk it right off the
+        // visible edge with nothing to bring it back. Nudging the pan a
+        // little whenever the pointer is close to the boundary keeps a
+        // dragged state visible the same way professional diagram tools
+        // (Figma, draw.io, etc.) handle edge-dragging, instead of just
+        // expanding the visible border, which would let content spill
+        // messily outside the rounded canvas card.
+        const EDGE_THRESHOLD = 60;
+        const EDGE_PAN_SPEED = 14;
+        const localX = e.clientX - rect.left;
+        const localY = e.clientY - rect.top;
+        let panDx = 0;
+        let panDy = 0;
+        if (localX < EDGE_THRESHOLD) panDx = EDGE_PAN_SPEED;
+        else if (localX > rect.width - EDGE_THRESHOLD) panDx = -EDGE_PAN_SPEED;
+        if (localY < EDGE_THRESHOLD) panDy = EDGE_PAN_SPEED;
+        else if (localY > rect.height - EDGE_THRESHOLD) panDy = -EDGE_PAN_SPEED;
+        if (panDx !== 0 || panDy !== 0) {
+          setPan((prev) => ({ x: prev.x + panDx, y: prev.y + panDy }));
+        }
       }
     }
   };
