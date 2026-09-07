@@ -14,7 +14,7 @@ import {
   convertDFAToRegex,
   convertNFAToDFA,
   convertRegexToNFA,
-  isEpsilon,
+  isAutomatonDeterministic,
   minimizeDFA,
   runBatchTests,
   simulateAutomatonStepByStep,
@@ -158,24 +158,6 @@ function generateHintsFromDFA(automaton: AutomatonDefinition, targetLabel: strin
     `There ${acceptCount === 1 ? 'is exactly 1 accepting state' : `are exactly ${acceptCount} accepting states`}.`,
     firstSymHint || fallbackHint,
   ];
-}
-
-// A valid DFA answer must have at most one transition per symbol per state,
-// and no ε-transitions (those are only meaningful for NFA/ENFA).
-function isAutomatonDeterministic(a: AutomatonDefinition): boolean {
-  for (const t of a.transitions) {
-    if (t.symbols.some((s) => isEpsilon(s))) return false;
-  }
-  const usedSymbolsPerState = new Map<string, Set<string>>();
-  for (const t of a.transitions) {
-    if (!usedSymbolsPerState.has(t.from)) usedSymbolsPerState.set(t.from, new Set());
-    const used = usedSymbolsPerState.get(t.from)!;
-    for (const sym of t.symbols) {
-      if (used.has(sym)) return false;
-      used.add(sym);
-    }
-  }
-  return true;
 }
 
 // Count states actually reachable from the start state — used to check

@@ -996,6 +996,40 @@ steps.push({
   return { dfa, steps };
 }
 
+// Checks whether an automaton is a valid, deterministic DFA — at most one
+// transition per symbol per state, and no ε-transitions (those are only
+// meaningful for NFA/ENFA). Returns full details of the first violation
+// found, not just a boolean, since "there's a problem" alone isn't
+// actionable for whoever is looking at the automaton.
+export function findDeterminismViolation(
+  a: AutomatonDefinition
+): { stateId: string; symbol: string; targets: string[] } | null {
+  for (const t of a.transitions) {
+    if (t.symbols.some((s) => isEpsilon(s))) {
+      return { stateId: t.from, symbol: 'ε', targets: [t.to] };
+    }
+  }
+  const targetsPerStateSymbol = new Map<string, Set<string>>(); // "stateId|symbol" -> targets
+  for (const t of a.transitions) {
+    for (const sym of t.symbols) {
+      const key = `${t.from}|${sym}`;
+      if (!targetsPerStateSymbol.has(key)) targetsPerStateSymbol.set(key, new Set());
+      targetsPerStateSymbol.get(key)!.add(t.to);
+    }
+  }
+  for (const [key, targets] of targetsPerStateSymbol) {
+    if (targets.size > 1) {
+      const [stateId, symbol] = key.split('|');
+      return { stateId, symbol, targets: Array.from(targets) };
+    }
+  }
+  return null;
+}
+
+export function isAutomatonDeterministic(a: AutomatonDefinition): boolean {
+  return findDeterminismViolation(a) === null;
+}
+
 // -------------------------------------------------------------
 // DFA MINIMIZATION (TABLE-FILLING / HOPCROFT)
 // -------------------------------------------------------------
@@ -1007,6 +1041,25 @@ export function minimizeDFA(dfa: AutomatonDefinition): {
   const states = dfa.states;
   const stateIds = states.map((s) => s.id);
   const alphabet = dfa.alphabet;
+
+  // The table-filling algorithm's precondition is that the input is
+  // already a valid, deterministic DFA — it has no meaningful answer for
+  // non-deterministic input. Without this check, a state with two
+  // conflicting transitions on the same symbol would silently have one of
+  // them ignored (whichever happened to come first in the transitions
+  // array) with no indication anything was wrong. This check doesn't
+  // change behavior for any valid DFA — it only adds a visible warning
+  // when the precondition is actually violated.
+  const violation = findDeterminismViolation(dfa);
+  const validationWarning = violation
+    ? `⚠ INPUT IS NOT A VALID DFA: state "${getStateName(dfa, violation.stateId)}" has ${
+        violation.symbol === 'ε'
+          ? 'an ε-transition (only valid for NFA/ENFA, not a DFA)'
+          : `multiple transitions on '${violation.symbol}' (to ${violation.targets
+              .map((id) => getStateName(dfa, id))
+              .join(' AND ')})`
+      }. Minimization requires a deterministic DFA — the result below arbitrarily used only one of the conflicting transitions and should not be trusted. `
+    : '';
 
   // Step 1: Remove unreachable states
   const reachable = new Set<string>([dfa.startStateId]);
@@ -1073,7 +1126,7 @@ export function minimizeDFA(dfa: AutomatonDefinition): {
       activeStates.filter((s) => acceptSet.has(s.id)).map((s) => s.name),
     ],
     distinguishableTable: JSON.parse(JSON.stringify(table)),
-    notes: 'Initial partition into Non-Accepting and Accepting states.',
+    notes: `${validationWarning}Initial partition into Non-Accepting and Accepting states.`,
   });
 
   // Iterative marking
